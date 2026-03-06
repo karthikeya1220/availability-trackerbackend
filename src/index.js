@@ -10,7 +10,7 @@ import { googleRouter } from "./routes/google.routes.js";
 import { errorHandler } from "./middleware/errorHandler.js";
 
 const app = express();
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 5001;
 
 const allowedOrigins = [
   "https://availabilitytrackerfrontend.vercel.app",
