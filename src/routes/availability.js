@@ -5,5 +5,5 @@ import { authenticate } from "../middleware/auth.js";
 export const availabilityRoutes = Router();
 
 availabilityRoutes.use(authenticate);
-availabilityRoutes.get("/weekly", getWeekly);
-availabilityRoutes.post("/batch", saveBatch);
+availabilityRoutes.get("/", getWeekly);
+availabilityRoutes.post("/", saveBatch);

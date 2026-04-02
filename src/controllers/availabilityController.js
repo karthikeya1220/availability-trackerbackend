@@ -12,44 +12,41 @@ import {
 
 export async function getWeekly(req, res, next) {
   try {
-    const { userId: targetUserId, mentorId, weekStart } = req.query;
+    const { entityId, entityType, weekStart } = req.query;
     const callerId = req.userId;
     const callerRole = req.userRole;
 
-    const hasUserId = targetUserId != null && String(targetUserId).trim() !== "";
-    const hasMentorId = mentorId != null && String(mentorId).trim() !== "";
-
     let where = {};
-    let requestedUserId = null;
-    let requestedMentorId = null;
+    let requestedEntityId = null;
+    let requestedEntityType = null;
 
-    if (hasUserId && !hasMentorId) {
-      where.userId = String(targetUserId).trim();
-      where.role = "USER";
-      requestedUserId = where.userId;
-    } else if (hasMentorId && !hasUserId) {
-      where.mentorId = String(mentorId).trim();
-      where.role = "MENTOR";
-      requestedMentorId = where.mentorId;
-    } else if (!hasUserId && !hasMentorId) {
+    // If no entity specified, use caller's own entity
+    if (!entityId && !entityType) {
       if (callerRole === "MENTOR") {
-        where.mentorId = callerId;
+        where.entityId = callerId;
+        where.entityType = "mentor";
         where.role = "MENTOR";
-        requestedMentorId = callerId;
+        requestedEntityId = callerId;
+        requestedEntityType = "mentor";
       } else {
-        where.userId = callerId;
+        where.entityId = callerId;
+        where.entityType = "user";
         where.role = "USER";
-        requestedUserId = callerId;
+        requestedEntityId = callerId;
+        requestedEntityType = "user";
       }
+    } else if (entityId && entityType) {
+      // Admin can query other entities with explicit entityId and entityType
+      if (callerRole !== "ADMIN") {
+        return res.status(403).json({ error: "Only admins can query other entities" });
+      }
+      where.entityId = String(entityId).trim();
+      where.entityType = String(entityType).trim();
+      where.role = String(entityType).toUpperCase() === "MENTOR" ? "MENTOR" : "USER";
+      requestedEntityId = where.entityId;
+      requestedEntityType = where.entityType;
     } else {
-      return res.status(400).json({ error: "Pass either userId or mentorId, not both" });
-    }
-
-    const isOwnRequest =
-      (requestedUserId === callerId && !requestedMentorId) ||
-      (requestedMentorId === callerId && !requestedUserId);
-    if (!isOwnRequest && callerRole !== "ADMIN") {
-      return res.status(403).json({ error: "Cannot view another user's availability" });
+      return res.status(400).json({ error: "Must provide both entityId and entityType, or neither" });
     }
 
     let start;
@@ -93,11 +90,39 @@ export async function getWeekly(req, res, next) {
 
 export async function saveBatch(req, res, next) {
   try {
-    const { slots } = req.body;
+    const { slots, entityId: overrideEntityId, entityType: overrideEntityType } = req.body;
     const callerId = req.userId;
     const role = req.userRole;
+    
     if (!Array.isArray(slots)) {
       return res.status(400).json({ error: "slots array required" });
+    }
+
+    // Determine entity context
+    let contextEntityId = null;
+    let contextEntityType = null;
+    let contextRole = null;
+
+    if (overrideEntityId && overrideEntityType) {
+      // Admin can specify entity for another person
+      if (role !== "ADMIN") {
+        return res.status(403).json({ error: "Only admins can set availability for other entities" });
+      }
+      contextEntityId = String(overrideEntityId).trim();
+      contextEntityType = String(overrideEntityType).trim().toLowerCase();
+      contextRole = contextEntityType === "mentor" ? "MENTOR" : "USER";
+    } else if (!overrideEntityId && !overrideEntityType) {
+      // Non-admin always operates on their own entity
+      contextEntityId = callerId;
+      if (role === "MENTOR") {
+        contextEntityType = "mentor";
+        contextRole = "MENTOR";
+      } else {
+        contextEntityType = "user";
+        contextRole = "USER";
+      }
+    } else {
+      return res.status(400).json({ error: "Must provide both entityId and entityType for override, or neither" });
     }
 
     const toCreate = [];
@@ -105,33 +130,6 @@ export async function saveBatch(req, res, next) {
 
     for (const slot of slots) {
       const { date, startTime, endTime, enabled } = slot;
-      const targetUserId = slot.userId;
-      const targetMentorId = slot.mentorId;
-
-      let saveAsUserId = null;
-      let saveAsMentorId = null;
-      let saveRole = "USER";
-      if (role === "ADMIN") {
-        if (targetMentorId != null && String(targetMentorId).trim() !== "") {
-          saveAsMentorId = String(targetMentorId).trim();
-          saveRole = "MENTOR";
-        } else {
-          saveAsUserId = (targetUserId != null && String(targetUserId).trim() !== "")
-            ? String(targetUserId).trim()
-            : callerId;
-          saveRole = "USER";
-        }
-      } else if (role === "MENTOR") {
-        saveAsMentorId = callerId;
-        saveRole = "MENTOR";
-      } else {
-        saveAsUserId = callerId;
-        saveRole = "USER";
-      }
-
-      if (saveAsUserId !== callerId && saveAsMentorId !== callerId && role !== "ADMIN") {
-        return res.status(403).json({ error: "Cannot modify another user's availability" });
-      }
 
       const dateObj = typeof date === "string" ? parseDateUTC(date) : new Date(date);
       const dateStr = dateObj.toISOString().slice(0, 10);
@@ -148,18 +146,17 @@ export async function saveBatch(req, res, next) {
 
       if (enabled) {
         toCreate.push({
-          userId: saveAsUserId,
-          mentorId: saveAsMentorId,
-          role: saveRole,
+          entityId: contextEntityId,
+          entityType: contextEntityType,
+          role: contextRole,
           date: dateObj,
           startTime: normStart,
           endTime: normEnd,
         });
       } else {
         toDelete.push({
-          userId: saveAsUserId,
-          mentorId: saveAsMentorId,
-          role: saveRole,
+          entityId: contextEntityId,
+          entityType: contextEntityType,
           date: dateObj,
           startTime: normStart,
         });
@@ -169,7 +166,8 @@ export async function saveBatch(req, res, next) {
     for (const d of toDelete) {
       await prisma.availability.deleteMany({
         where: {
-          ...(d.userId != null ? { userId: d.userId } : { mentorId: d.mentorId }),
+          entityId: d.entityId,
+          entityType: d.entityType,
           date: d.date,
           startTime: d.startTime,
         },
@@ -177,47 +175,26 @@ export async function saveBatch(req, res, next) {
     }
 
     for (const c of toCreate) {
-      if (c.role === "MENTOR") {
-        await prisma.availability.upsert({
-          where: {
-            mentorId_date_startTime: {
-              mentorId: c.mentorId,
-              date: c.date,
-              startTime: c.startTime,
-            },
-          },
-          create: {
-            id: uuidv4(),
-            userId: null,
-            mentorId: c.mentorId,
-            role: "MENTOR",
+      await prisma.availability.upsert({
+        where: {
+          availabilities_entity_id_type_date_start_time_key: {
+            entityId: c.entityId,
+            entityType: c.entityType,
             date: c.date,
             startTime: c.startTime,
-            endTime: c.endTime,
           },
-          update: { endTime: c.endTime },
-        });
-      } else {
-        await prisma.availability.upsert({
-          where: {
-            userId_date_startTime: {
-              userId: c.userId,
-              date: c.date,
-              startTime: c.startTime,
-            },
-          },
-          create: {
-            id: uuidv4(),
-            userId: c.userId,
-            mentorId: null,
-            role: "USER",
-            date: c.date,
-            startTime: c.startTime,
-            endTime: c.endTime,
-          },
-          update: { endTime: c.endTime },
-        });
-      }
+        },
+        create: {
+          id: uuidv4(),
+          entityId: c.entityId,
+          entityType: c.entityType,
+          role: c.role,
+          date: c.date,
+          startTime: c.startTime,
+          endTime: c.endTime,
+        },
+        update: { endTime: c.endTime },
+      });
     }
 
     res.json({ ok: true });
