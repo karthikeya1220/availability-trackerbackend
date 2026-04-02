@@ -24,7 +24,7 @@ model User {
 
   availabilityAsUser   Availability[] @relation("UserAvailability")
   availabilityAsMentor Availability[] @relation("MentorAvailability")
-  meetingsAsAdmin      Meeting[]      @relation("AdminMeetings")
+  callsAsAdmin         Call[]         @relation("AdminCalls")
 }
 
 model Availability {
@@ -52,7 +52,7 @@ model Availability {
   @@map("availabilities")
 }
 
-model Meeting {
+model Call {
   id              String   @id @default(uuid())
   adminId         String   @map("admin_id")
   title           String
@@ -60,17 +60,19 @@ model Meeting {
   endTime         DateTime @map("end_time")
   createdAt       DateTime @default(now()) @map("created_at")
 
-  admin        User                 @relation("AdminMeetings", fields: [adminId], references: [id], onDelete: Cascade)
-  participants MeetingParticipant[]
+  admin        User            @relation("AdminCalls", fields: [adminId], references: [id], onDelete: Cascade)
+  participants CallParticipant[]
+
+  @@map("calls")
 }
 
-model MeetingParticipant {
+model CallParticipant {
   id        String @id @default(uuid())
-  meetingId String @map("meeting_id")
+  callId    String @map("call_id")
   email     String
 
-  meeting Meeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  call Call @relation(fields: [callId], references: [id], onDelete: Cascade)
 
-  @@unique([meetingId, email])
-  @@map("meeting_participants")
+  @@unique([callId, email])
+  @@map("call_participants")
 }

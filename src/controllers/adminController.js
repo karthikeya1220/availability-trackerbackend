@@ -198,8 +198,8 @@ export async function scheduleMeeting(req, res, next) {
       ? participantEmails.map((e) => (typeof e === "string" ? e.trim() : "")).filter(Boolean)
       : [];
 
-    // Create meeting in DB
-    const meeting = await prisma.meeting.create({
+    // Create call in DB
+    const call = await prisma.call.create({
       data: {
         id: uuidv4(),
         adminId,
@@ -210,18 +210,18 @@ export async function scheduleMeeting(req, res, next) {
     });
 
     if (emails.length > 0) {
-      await prisma.meetingParticipant.createMany({
+      await prisma.callParticipant.createMany({
         data: emails.map((email) => ({
           id: uuidv4(),
-          meetingId: meeting.id,
+          callId: call.id,
           email,
         })),
         skipDuplicates: true,
       });
     }
 
-    const withParticipants = await prisma.meeting.findUnique({
-      where: { id: meeting.id },
+    const withParticipants = await prisma.call.findUnique({
+      where: { id: call.id },
       include: { participants: true },
     });
 
@@ -230,3 +230,6 @@ export async function scheduleMeeting(req, res, next) {
     next(e);
   }
 }
+
+// Alias for new API endpoint
+export const bookCall = scheduleMeeting;

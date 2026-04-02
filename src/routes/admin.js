@@ -6,6 +6,7 @@ import {
   getAvailabilityForUser,
   getOverlappingSlots,
   scheduleMeeting,
+  bookCall,
 } from "../controllers/adminController.js";
 import { authenticate, requireRole } from "../middleware/auth.js";
 
@@ -20,3 +21,4 @@ adminRoutes.post("/create-user", createUser);
 adminRoutes.get("/availability/:userId", getAvailabilityForUser);
 adminRoutes.get("/availability/:userId/overlap", getOverlappingSlots);
 adminRoutes.post("/meetings", scheduleMeeting);
+adminRoutes.post("/calls/book", bookCall);

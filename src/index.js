@@ -4,7 +4,7 @@ import cors from "cors";
 import cookieParser from "cookie-parser";
 import { authRoutes } from "./routes/auth.js";
 import { availabilityRoutes } from "./routes/availability.js";
-import { meetingRoutes } from "./routes/meeting.js";
+import { callsRoutes } from "./routes/calls.js";
 import { adminRoutes } from "./routes/admin.js";
 import { errorHandler } from "./middleware/errorHandler.js";
 
@@ -35,7 +35,7 @@ app.use("/api/auth", (req, res, next) => {
 
 app.use("/api/auth", authRoutes);
 app.use("/api/availability", availabilityRoutes);
-app.use("/api/meetings", meetingRoutes);
+app.use("/api/calls", callsRoutes);
 app.use("/api/admin", adminRoutes);
 
 app.get("/health", (_, res) => res.json({ ok: true }));
