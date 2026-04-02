@@ -84,8 +84,8 @@ export async function getAvailabilityForUser(req, res, next) {
     const slots = await prisma.availability.findMany({
       where: {
         OR: [
-          { userId, role: "USER" },
-          { mentorId: userId, role: "MENTOR" },
+          { entityId: userId, entityType: "user", role: "USER" },
+          { entityId: userId, entityType: "mentor", role: "MENTOR" },
         ],
         date: { gte: weekStartDate, lt: new Date(weekStartDate.getTime() + 7 * 24 * 60 * 60 * 1000) },
       },
@@ -140,8 +140,8 @@ export async function getOverlappingSlots(req, res, next) {
     const slots = await prisma.availability.findMany({
       where: {
         OR: [
-          { userId, role: "USER" },
-          { mentorId: userId, role: "MENTOR" },
+          { entityId: userId, entityType: "user", role: "USER" },
+          { entityId: userId, entityType: "mentor", role: "MENTOR" },
         ],
       },
       orderBy: [{ date: "asc" }, { startTime: "asc" }],
