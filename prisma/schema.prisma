@@ -39,6 +39,8 @@ model Availability {
   date        DateTime   @db.Date
   startTime   DateTime   @map("start_time")
   endTime     DateTime   @map("end_time")
+  isBooked    Boolean    @default(false) @map("is_booked")
+  bookedAt    DateTime?  @map("booked_at")
   createdAt   DateTime   @default(now()) @map("created_at")
 
   user User @relation(fields: [entityId], references: [id], onDelete: Cascade)

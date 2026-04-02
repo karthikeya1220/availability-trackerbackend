@@ -6,6 +6,7 @@ import { authRoutes } from "./routes/auth.js";
 import { availabilityRoutes } from "./routes/availability.js";
 import { callsRoutes } from "./routes/calls.js";
 import { adminRoutes } from "./routes/admin.js";
+import bookingRoutes from "./routes/booking.js";
 import { errorHandler } from "./middleware/errorHandler.js";
 
 const app = express();
@@ -35,6 +36,7 @@ app.use("/api/auth", (req, res, next) => {
 
 app.use("/api/auth", authRoutes);
 app.use("/api/availability", availabilityRoutes);
+app.use("/api/bookings", bookingRoutes);
 app.use("/api/calls", callsRoutes);
 app.use("/api/admin", adminRoutes);
 
