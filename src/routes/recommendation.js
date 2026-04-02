@@ -13,6 +13,7 @@ import {
   updateUserProfile,
   getUserProfile,
   getMentorProfile,
+  getRecommendationsAdmin,
 } from "../controllers/recommendationController.js";
 
 const router = express.Router();
@@ -23,6 +24,10 @@ router.use(authenticateToken);
 // Get recommendations for a user
 // GET /recommendations?userId=xxx&limit=5&callType=resume_revamp
 router.get("/", getRecommendations);
+
+// Admin-only: Get recommendations for a specific user
+// GET /recommendations/admin?user_id=xxx&limit=5&call_type=resume_revamp
+router.get("/admin", getRecommendationsAdmin);
 
 // Get detailed recommendation report
 // GET /recommendations/report?userId=xxx&callType=resume_revamp

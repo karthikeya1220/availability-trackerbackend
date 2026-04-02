@@ -314,3 +314,133 @@ export async function getMentorProfile(req, res, next) {
     next(err);
   }
 }
+
+/**
+ * Admin-only endpoint: Get mentor recommendations for a specific user
+ * 
+ * Query params:
+ * - user_id (required): User to get recommendations for
+ * - call_type (optional): Type of call (resume_revamp, job_market_guidance, mock_interview)
+ * - limit (optional): Max number of recommendations (default: 5, max: 20)
+ * 
+ * Authorization: Admin only
+ */
+export async function getRecommendationsAdmin(req, res, next) {
+  try {
+    // Admin authorization check
+    if (req.userRole !== "ADMIN") {
+      return res.status(403).json({
+        error: "Only admins can access this endpoint",
+      });
+    }
+
+    // Input validation
+    const { user_id, call_type, limit } = req.query;
+
+    if (!user_id) {
+      return res.status(400).json({
+        error: "user_id query parameter is required",
+      });
+    }
+
+    // Validate limit parameter
+    const limitNum = Math.min(Math.max(parseInt(limit) || 5, 1), 20);
+
+    // Validate call_type if provided
+    const validCallTypes = ["resume_revamp", "job_market_guidance", "mock_interview", "general"];
+    const callType = call_type && validCallTypes.includes(call_type) ? call_type : null;
+
+    // Fetch user profile
+    const userRecord = await prisma.user.findUnique({
+      where: { id: user_id },
+      include: { userProfile: true },
+    });
+
+    if (!userRecord) {
+      return res.status(404).json({
+        error: `User with ID "${user_id}" not found`,
+      });
+    }
+
+    // Check if user has a profile
+    if (!userRecord.userProfile) {
+      return res.status(400).json({
+        error: `User "${userRecord.name}" does not have a profile set up`,
+        userId: user_id,
+        userName: userRecord.name,
+      });
+    }
+
+    // Fetch all active mentors with their profiles
+    const mentors = await prisma.user.findMany({
+      where: { role: "MENTOR" },
+      include: { mentorProfile: true },
+    });
+
+    if (mentors.length === 0) {
+      return res.status(200).json({
+        userId: user_id,
+        userName: userRecord.name,
+        recommendations: [],
+        callType: callType || "general",
+        message: "No mentors available",
+      });
+    }
+
+    // Build mentor objects for scoring (filter out mentors without profiles)
+    const mentorProfiles = mentors
+      .filter((m) => m.mentorProfile)
+      .map((m) => ({
+        id: m.id,
+        name: m.name,
+        email: m.email,
+        ...m.mentorProfile,
+      }));
+
+    if (mentorProfiles.length === 0) {
+      return res.status(200).json({
+        userId: user_id,
+        userName: userRecord.name,
+        recommendations: [],
+        callType: callType || "general",
+        message: "No mentors with complete profiles available",
+      });
+    }
+
+    // Run recommendation engine
+    const recommendations = recommendMentors(
+      userRecord.userProfile,
+      mentorProfiles,
+      callType,
+      limitNum
+    );
+
+    res.json({
+      userId: user_id,
+      userName: userRecord.name,
+      userProfile: {
+        interests: userRecord.userProfile.interests,
+        goal: userRecord.userProfile.goal,
+        domain: userRecord.userProfile.domain,
+      },
+      callType: callType || "general",
+      requestedLimit: limitNum,
+      returnedCount: recommendations.length,
+      recommendations: recommendations.map((rec) => ({
+        mentorId: rec.id,
+        mentorName: rec.name,
+        mentorEmail: rec.email,
+        company: rec.company,
+        expertise: rec.expertise,
+        communicationScore: rec.communicationScore,
+        rating: rec.rating,
+        yearsOfExperience: rec.yearsOfExperience,
+        score: Math.round(rec.score * 100) / 100,
+        matchPercentage: Math.round(rec.matchPercentage),
+        reasoning: rec.reasoning,
+      })),
+    });
+  } catch (err) {
+    next(err);
+  }
+}
