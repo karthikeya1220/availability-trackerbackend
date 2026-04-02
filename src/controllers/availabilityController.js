@@ -88,6 +88,139 @@ export async function getWeekly(req, res, next) {
   }
 }
 
+/**
+ * Find overlapping availability slots between two entities
+ * 
+ * Overlap conditions:
+ * - Same date
+ * - start_time < other.end_time AND end_time > other.start_time
+ * - Neither slot is already booked
+ * 
+ * @param {String} userId - First entity ID (user)
+ * @param {String} mentorId - Second entity ID (mentor)
+ * @param {Date} dateStart - Start date for range filter (optional)
+ * @param {Date} dateEnd - End date for range filter (optional)
+ * @returns {Array} Overlapping slots with both user and mentor availability
+ */
+export async function findOverlappingSlots(userId, mentorId, dateStart = null, dateEnd = null) {
+  try {
+    // Build date filter
+    const dateFilter = {};
+    if (dateStart) {
+      const start = new Date(dateStart);
+      start.setUTCHours(0, 0, 0, 0);
+      dateFilter.gte = start;
+    }
+    if (dateEnd) {
+      const end = new Date(dateEnd);
+      end.setUTCHours(23, 59, 59, 999);
+      dateFilter.lte = end;
+    }
+
+    // Fetch user's availability slots
+    const userSlots = await prisma.availability.findMany({
+      where: {
+        entityId: userId,
+        entityType: "user",
+        ...(Object.keys(dateFilter).length > 0 && { date: dateFilter }),
+      },
+      select: {
+        id: true,
+        date: true,
+        startTime: true,
+        endTime: true,
+        entityId: true,
+        entityType: true,
+      },
+      orderBy: [{ date: "asc" }, { startTime: "asc" }],
+    });
+
+    if (userSlots.length === 0) {
+      return [];
+    }
+
+    // Fetch mentor's availability slots for same dates
+    const userDates = [...new Set(userSlots.map((s) => s.date.toISOString().split("T")[0]))];
+    const mentorSlots = await prisma.availability.findMany({
+      where: {
+        entityId: mentorId,
+        entityType: "mentor",
+        date: {
+          in: userDates.map((d) => new Date(d)),
+        },
+      },
+      select: {
+        id: true,
+        date: true,
+        startTime: true,
+        endTime: true,
+        entityId: true,
+        entityType: true,
+      },
+      orderBy: [{ date: "asc" }, { startTime: "asc" }],
+    });
+
+    if (mentorSlots.length === 0) {
+      return [];
+    }
+
+    // Find overlaps: start_time < other.end_time AND end_time > other.start_time
+    const overlaps = [];
+    for (const userSlot of userSlots) {
+      for (const mentorSlot of mentorSlots) {
+        // Check if same date
+        const userDateStr = userSlot.date.toISOString().split("T")[0];
+        const mentorDateStr = mentorSlot.date.toISOString().split("T")[0];
+
+        if (userDateStr !== mentorDateStr) {
+          continue; // Different dates, no overlap
+        }
+
+        // Check time overlap: start_time < other.end_time AND end_time > other.start_time
+        const userStart = new Date(userSlot.startTime);
+        const userEnd = new Date(userSlot.endTime);
+        const mentorStart = new Date(mentorSlot.startTime);
+        const mentorEnd = new Date(mentorSlot.endTime);
+
+        const hasOverlap =
+          userStart < mentorEnd && userEnd > mentorStart;
+
+        if (hasOverlap) {
+          // Calculate overlap period
+          const overlapStart = userStart > mentorStart ? userStart : mentorStart;
+          const overlapEnd = userEnd < mentorEnd ? userEnd : mentorEnd;
+
+          overlaps.push({
+            date: userDateStr,
+            userSlot: {
+              id: userSlot.id,
+              startTime: userSlot.startTime.toISOString(),
+              endTime: userSlot.endTime.toISOString(),
+            },
+            mentorSlot: {
+              id: mentorSlot.id,
+              startTime: mentorSlot.startTime.toISOString(),
+              endTime: mentorSlot.endTime.toISOString(),
+            },
+            overlapPeriod: {
+              startTime: overlapStart.toISOString(),
+              endTime: overlapEnd.toISOString(),
+              durationMinutes: Math.round(
+                (overlapEnd.getTime() - overlapStart.getTime()) / (1000 * 60)
+              ),
+            },
+          });
+        }
+      }
+    }
+
+    return overlaps;
+  } catch (error) {
+    console.error("Error finding overlapping slots:", error);
+    throw error;
+  }
+}
+
 export async function saveBatch(req, res, next) {
   try {
     const { slots, entityId: overrideEntityId, entityType: overrideEntityType } = req.body;
@@ -200,5 +333,75 @@ export async function saveBatch(req, res, next) {
     res.json({ ok: true });
   } catch (e) {
     next(e);
+  }
+}
+
+/**
+ * API Handler: Find overlapping availability slots between user and mentor
+ * 
+ * Query Parameters:
+ * - userId: User ID (required)
+ * - mentorId: Mentor ID (required)
+ * - dateStart: Start date in YYYY-MM-DD format (optional)
+ * - dateEnd: End date in YYYY-MM-DD format (optional)
+ * 
+ * Returns: Array of overlapping slots with structured data
+ */
+export async function findOverlaps(req, res, next) {
+  try {
+    const { userId, mentorId, dateStart, dateEnd } = req.query;
+
+    // Validate required parameters
+    if (!userId || !mentorId) {
+      return res.status(400).json({
+        error: "userId and mentorId are required",
+      });
+    }
+
+    // Validate date format if provided
+    let parsedDateStart = null;
+    let parsedDateEnd = null;
+
+    if (dateStart) {
+      const dateObj = new Date(dateStart);
+      if (isNaN(dateObj.getTime())) {
+        return res.status(400).json({
+          error: "dateStart must be valid ISO date (YYYY-MM-DD)",
+        });
+      }
+      parsedDateStart = dateObj;
+    }
+
+    if (dateEnd) {
+      const dateObj = new Date(dateEnd);
+      if (isNaN(dateObj.getTime())) {
+        return res.status(400).json({
+          error: "dateEnd must be valid ISO date (YYYY-MM-DD)",
+        });
+      }
+      parsedDateEnd = dateObj;
+    }
+
+    // Find overlaps
+    const overlaps = await findOverlappingSlots(
+      String(userId).trim(),
+      String(mentorId).trim(),
+      parsedDateStart,
+      parsedDateEnd
+    );
+
+    // Structure response
+    res.json({
+      userId: String(userId).trim(),
+      mentorId: String(mentorId).trim(),
+      dateRange: {
+        startDate: dateStart || null,
+        endDate: dateEnd || null,
+      },
+      totalOverlaps: overlaps.length,
+      overlaps: overlaps,
+    });
+  } catch (error) {
+    next(error);
   }
 }
