@@ -215,18 +215,30 @@ async function createAdmin() {
 
   const hashedPassword = await hashPassword("Admin@12345");
 
-  const admin = await prisma.user.create({
-    data: {
-      id: uuidv4(),
-      name: "Admin User",
-      email: "admin@mentorque.com",
-      password: hashedPassword,
-      role: "ADMIN",
-      timezone: "UTC",
-    },
+  let admin = await prisma.user.findUnique({
+    where: { email: "admin@mentorque.com" },
   });
 
-  console.log(`   ✅ Admin created: ${admin.email}`);
+  if (admin) {
+    // Admin already exists, just update password
+    admin = await prisma.user.update({
+      where: { id: admin.id },
+      data: { password: hashedPassword },
+    });
+  } else {
+    admin = await prisma.user.create({
+      data: {
+        id: uuidv4(),
+        name: "Admin User",
+        email: "admin@mentorque.com",
+        password: hashedPassword,
+        role: "ADMIN",
+        timezone: "UTC",
+      },
+    });
+  }
+
+  console.log(`   ✅ Admin created/updated: ${admin.email}`);
   return admin;
 }
 
@@ -249,6 +261,20 @@ async function createMentors() {
         password: hashedPassword,
         role: "MENTOR",
         timezone: "UTC",
+      },
+    });
+
+    // Create mentor profile with expertise and metadata
+    await prisma.mentorProfile.create({
+      data: {
+        mentorId: mentor.id,
+        expertise: profile.expertise,
+        description: profile.description,
+        company: profile.company,
+        companySize: profile.company_size,
+        rating: profile.rating,
+        communicationScore: 4.0, // Mentors have high communication by default
+        yearsOfExperience: 8,
       },
     });
 
@@ -301,6 +327,17 @@ async function createUsers() {
         password: hashedPassword,
         role: "USER",
         timezone: "UTC",
+      },
+    });
+
+    // Create user profile with interests and goals
+    await prisma.userProfile.create({
+      data: {
+        userId: user.id,
+        interests: profile.interests,
+        goal: profile.goal,
+        domain: profile.interests[0] || "", // Use first interest as domain
+        description: profile.goal,
       },
     });
 
@@ -394,45 +431,18 @@ async function main() {
     // Clean up existing seed data to allow re-running
     console.log("🧹 Cleaning up existing seed data...");
     
-    // Get all the emails we'll create
-    const emailsToDelete = [
-      "admin@mentorque.com",
-      // Mentor emails
-      "sarah.chen@tech.com",
-      "james.wilson@startup.com",
-      "priya.sharma@fintech.com",
-      "marcus.johnson@founder.com",
-      "elena.rodriguez@creative.com",
-      // User emails
-      "alex.kumar@email.com",
-      "jordan.smith@email.com",
-      "casey.patel@email.com",
-      "morgan.lee@email.com",
-      "riley.chen@email.com",
-      "sam.garcia@email.com",
-      "taylor.johnson@email.com",
-      "avery.brown@email.com",
-      "blake.wilson@email.com",
-      "jordan.brown@email.com",
-    ];
-
-    // First delete availability slots for these users (due to foreign key constraint)
-    const usersToDelete = await prisma.user.findMany({
-      where: { email: { in: emailsToDelete } },
-      select: { id: true },
+    // Delete all mentors and users (except we'll recreate them)
+    // Delete profiles first (foreign key constraint)
+    await prisma.mentorProfile.deleteMany({});
+    await prisma.userProfile.deleteMany({});
+    
+    // Delete availability slots
+    await prisma.availability.deleteMany({});
+    
+    // Delete all non-admin users
+    await prisma.user.deleteMany({
+      where: { role: { in: ["MENTOR", "USER"] } },
     });
-
-    if (usersToDelete.length > 0) {
-      const userIds = usersToDelete.map((u) => u.id);
-      await prisma.availability.deleteMany({
-        where: { entityId: { in: userIds } },
-      });
-
-      // Then delete the users themselves
-      await prisma.user.deleteMany({
-        where: { id: { in: userIds } },
-      });
-    }
 
     console.log("   ✅ Cleanup complete\n");
 

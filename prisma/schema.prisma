@@ -31,6 +31,8 @@ model User {
   callsAsAdmin          Call[]              @relation("AdminCalls")
   callParticipantsAsUser   CallParticipant[] @relation("ParticipantAsUser")
   callParticipantsAsMentor CallParticipant[] @relation("ParticipantAsMentor")
+  mentorProfile         MentorProfile?      @relation("MentorProfile")
+  userProfile           UserProfile?        @relation("UserProfile")
 }
 
 model Availability {
@@ -95,5 +97,40 @@ model CallParticipant {
   @@map("call_participants")
 }
 
-// Add relations to User model for participants
-// Note: These are added here as extensions to the User model
+model MentorProfile {
+  id                String   @id @default(uuid())
+  mentorId          String   @unique @map("mentor_id")
+  expertise         String[] @default([]) // Array of skill tags
+  description       String   @default("") // Detailed bio/description
+  company           String   @default("") // Company name
+  companySize       String   @default("") @map("company_size") // e.g., "50000+", "100-500"
+  communicationScore Float   @default(3.0) @map("communication_score") // 1-5 scale
+  rating            Float    @default(4.0) // 1-5 star rating
+  yearsOfExperience Int     @default(0) @map("years_of_experience")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  mentor User @relation("MentorProfile", fields: [mentorId], references: [id], onDelete: Cascade)
+
+  @@index([mentorId], map: "mentor_profile_mentor_id_idx")
+  @@index([communicationScore], map: "mentor_profile_communication_score_idx")
+  @@index([rating], map: "mentor_profile_rating_idx")
+  @@map("mentor_profiles")
+}
+
+model UserProfile {
+  id            String   @id @default(uuid())
+  userId        String   @unique @map("user_id")
+  interests     String[] @default([]) // Array of interest tags
+  goal          String   @default("") // Primary learning goal
+  domain        String   @default("") // Domain/specialty area
+  description   String   @default("") // About user/background
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  user User @relation("UserProfile", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId], map: "user_profile_user_id_idx")
+  @@index([domain], map: "user_profile_domain_idx")
+  @@map("user_profiles")
+}
