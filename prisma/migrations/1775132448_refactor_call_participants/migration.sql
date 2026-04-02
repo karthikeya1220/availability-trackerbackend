@@ -2,8 +2,8 @@
 -- This ensures referential integrity and proper relationships between scheduled_calls → users → mentors
 
 -- Step 1: Add new columns to call_participants
-ALTER TABLE "call_participants" ADD COLUMN "user_id" UUID;
-ALTER TABLE "call_participants" ADD COLUMN "mentor_id" UUID;
+ALTER TABLE "call_participants" ADD COLUMN "user_id" TEXT;
+ALTER TABLE "call_participants" ADD COLUMN "mentor_id" TEXT;
 
 -- Step 2: Make email nullable (for backward compatibility during transition)
 ALTER TABLE "call_participants" ALTER COLUMN "email" DROP NOT NULL;
