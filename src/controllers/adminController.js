@@ -3,7 +3,6 @@ import { DateTime } from "luxon";
 import { prisma } from "../lib/prisma.js";
 import { v4 as uuidv4 } from "uuid";
 import { isPastTime } from "../utils/time.js";
-import { createCalendarEventWithMeet } from "../services/googleCalendar.js";
 
 export async function listUsers(req, res, next) {
   try {
@@ -169,7 +168,7 @@ export async function scheduleMeeting(req, res, next) {
 
     let start;
     let end;
-    /** IANA timezone for Google Calendar (e.g. "Asia/Kolkata" or "UTC"). DB always stores UTC. */
+    // IANA timezone (e.g. "Asia/Kolkata" or "UTC"). DB always stores UTC.
     let requestTimezone = "UTC";
 
     if (date && timezone && typeof startTime === "string" && typeof endTime === "string" && /^\d{2}:\d{2}$/.test(startTime) && /^\d{2}:\d{2}$/.test(endTime)) {
@@ -199,7 +198,7 @@ export async function scheduleMeeting(req, res, next) {
       ? participantEmails.map((e) => (typeof e === "string" ? e.trim() : "")).filter(Boolean)
       : [];
 
-    // Create meeting in DB first (meetLink null if Google not connected or fails).
+    // Create meeting in DB
     const meeting = await prisma.meeting.create({
       data: {
         id: uuidv4(),
@@ -207,9 +206,6 @@ export async function scheduleMeeting(req, res, next) {
         title: title.trim(),
         startTime: start,
         endTime: end,
-        meetLink: null,
-        calendarEventId: null,
-        googleEventId: null,
       },
     });
 
@@ -224,39 +220,12 @@ export async function scheduleMeeting(req, res, next) {
       });
     }
 
-    // Create Google Calendar event + Meet link using GOOGLE_REFRESH_TOKEN from .env (do not break meeting creation if this fails).
-    let meetLink = null;
-    let googleEventId = null;
-    try {
-      const created = await createCalendarEventWithMeet({
-        title: title.trim(),
-        startTime: start,
-        endTime: end,
-        attendeeEmails: emails,
-        timezone: requestTimezone,
-      });
-      meetLink = created.meetLink ?? null;
-      googleEventId = created.eventId ?? null;
-      if (meetLink || googleEventId) {
-        await prisma.meeting.update({
-          where: { id: meeting.id },
-          data: {
-            ...(meetLink && { meetLink }),
-            ...(googleEventId && { googleEventId }),
-            ...(googleEventId && { calendarEventId: googleEventId }),
-          },
-        });
-      }
-    } catch (err) {
-      console.error("[scheduleMeeting] Google Calendar/Meet API failed (meeting already saved). Meet link will be null.", err?.message || err);
-    }
-
     const withParticipants = await prisma.meeting.findUnique({
       where: { id: meeting.id },
       include: { participants: true },
     });
 
-    res.status(201).json({ ...withParticipants, meetLink: withParticipants.meetLink ?? meetLink });
+    res.status(201).json(withParticipants);
   } catch (e) {
     next(e);
   }

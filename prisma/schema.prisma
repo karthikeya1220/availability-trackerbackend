@@ -20,7 +20,6 @@ model User {
   password           String
   role               Role     @default(USER)
   timezone           String   @default("UTC")
-  googleRefreshToken String?  @map("google_refresh_token")
   createdAt          DateTime @default(now()) @map("created_at")
 
   availabilityAsUser   Availability[] @relation("UserAvailability")
@@ -59,9 +58,6 @@ model Meeting {
   title           String
   startTime       DateTime @map("start_time")
   endTime         DateTime @map("end_time")
-  meetLink        String?  @map("meet_link")
-  calendarEventId String?  @map("calendar_event_id")
-  googleEventId   String?  @map("google_event_id")
   createdAt       DateTime @default(now()) @map("created_at")
 
   admin        User                 @relation("AdminMeetings", fields: [adminId], references: [id], onDelete: Cascade)
