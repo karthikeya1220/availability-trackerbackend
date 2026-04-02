@@ -27,8 +27,10 @@ model User {
   timezone           String   @default("UTC")
   createdAt          DateTime @default(now()) @map("created_at")
 
-  availabilities Availability[]
-  callsAsAdmin   Call[]         @relation("AdminCalls")
+  availabilities        Availability[]
+  callsAsAdmin          Call[]              @relation("AdminCalls")
+  callParticipantsAsUser   CallParticipant[] @relation("ParticipantAsUser")
+  callParticipantsAsMentor CallParticipant[] @relation("ParticipantAsMentor")
 }
 
 model Availability {
@@ -72,12 +74,26 @@ model Call {
 }
 
 model CallParticipant {
-  id        String @id @default(uuid())
-  callId    String @map("call_id")
-  email     String
+  id        String  @id @default(uuid())
+  callId    String  @map("call_id")
+  userId    String? @map("user_id")
+  mentorId  String? @map("mentor_id")
+  
+  // Keep email for backward compatibility during migration
+  email     String?
 
-  call Call @relation(fields: [callId], references: [id], onDelete: Cascade)
+  call   Call   @relation(fields: [callId], references: [id], onDelete: Cascade)
+  user   User?  @relation("ParticipantAsUser", fields: [userId], references: [id], onDelete: SetNull)
+  mentor User?  @relation("ParticipantAsMentor", fields: [mentorId], references: [id], onDelete: SetNull)
 
-  @@unique([callId, email])
+  // At least one of userId or mentorId must be set
+  // Ensure userId and mentorId are unique per call (can't have same person twice)
+  @@unique([callId, userId], map: "call_participants_call_user_idx")
+  @@unique([callId, mentorId], map: "call_participants_call_mentor_idx")
+  @@index([userId], map: "call_participants_user_id_idx")
+  @@index([mentorId], map: "call_participants_mentor_id_idx")
   @@map("call_participants")
 }
+
+// Add relations to User model for participants
+// Note: These are added here as extensions to the User model

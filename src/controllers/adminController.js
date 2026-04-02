@@ -157,10 +157,16 @@ export async function getOverlappingSlots(req, res, next) {
   }
 }
 
+/**
+ * Schedule a meeting/call with participants
+ * Supports both:
+ * - Legacy: participantEmails (array of email strings) - backward compatible
+ * - New: participants (array of { userId?, mentorId?, email? })
+ */
 export async function scheduleMeeting(req, res, next) {
   try {
     const adminId = req.userId;
-    const { title, startTime, endTime, date, timezone, participantEmails } = req.body;
+    const { title, startTime, endTime, date, timezone, participantEmails, participants } = req.body;
 
     if (!title?.trim()) {
       return res.status(400).json({ error: "title is required" });
@@ -194,10 +200,6 @@ export async function scheduleMeeting(req, res, next) {
       return res.status(400).json({ error: "Cannot schedule meeting in the past" });
     }
 
-    const emails = Array.isArray(participantEmails)
-      ? participantEmails.map((e) => (typeof e === "string" ? e.trim() : "")).filter(Boolean)
-      : [];
-
     // Create call in DB
     const call = await prisma.call.create({
       data: {
@@ -209,20 +211,68 @@ export async function scheduleMeeting(req, res, next) {
       },
     });
 
-    if (emails.length > 0) {
+    // Process participants (supports both new ID-based and legacy email-based)
+    let participantData = [];
+
+    // New format: array of objects with userId/mentorId
+    if (Array.isArray(participants) && participants.length > 0) {
+      participantData = participants
+        .map((p) => {
+          const userId = typeof p === "object" ? p.userId : undefined;
+          const mentorId = typeof p === "object" ? p.mentorId : undefined;
+          const email = typeof p === "object" ? p.email : undefined;
+
+          // Validate: at least userId or mentorId must be provided
+          if (!userId && !mentorId) {
+            throw new Error("Each participant must have userId or mentorId");
+          }
+
+          return {
+            id: uuidv4(),
+            callId: call.id,
+            userId: userId || null,
+            mentorId: mentorId || null,
+            email: email || null,
+          };
+        });
+    }
+    // Legacy format: array of email strings (backward compatible)
+    else if (Array.isArray(participantEmails) && participantEmails.length > 0) {
+      const emails = participantEmails
+        .map((e) => (typeof e === "string" ? e.trim() : ""))
+        .filter(Boolean);
+
+      participantData = emails.map((email) => ({
+        id: uuidv4(),
+        callId: call.id,
+        userId: null,
+        mentorId: null,
+        email,
+      }));
+    }
+
+    // Create participants
+    if (participantData.length > 0) {
       await prisma.callParticipant.createMany({
-        data: emails.map((email) => ({
-          id: uuidv4(),
-          callId: call.id,
-          email,
-        })),
+        data: participantData,
         skipDuplicates: true,
       });
     }
 
     const withParticipants = await prisma.call.findUnique({
       where: { id: call.id },
-      include: { participants: true },
+      include: {
+        participants: {
+          include: {
+            user: {
+              select: { id: true, name: true, email: true, role: true },
+            },
+            mentor: {
+              select: { id: true, name: true, email: true, role: true },
+            },
+          },
+        },
+      },
     });
 
     res.status(201).json(withParticipants);
