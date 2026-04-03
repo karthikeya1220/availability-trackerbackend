@@ -4,7 +4,7 @@ import cors from "cors";
 import cookieParser from "cookie-parser";
 import { authRoutes } from "./routes/auth.js";
 import { availabilityRoutes } from "./routes/availability.js";
-import { callsRoutes } from "./routes/calls.js";
+import { callRoutes } from "./routes/calls.js";
 import { adminRoutes } from "./routes/admin.js";
 import bookingRoutes from "./routes/booking.js";
 import recommendationRoutes from "./routes/recommendation.js";
@@ -63,7 +63,7 @@ app.use("/api/auth", (req, res, next) => {
 app.use("/api/auth", authRoutes);
 app.use("/api/availability", availabilityRoutes);
 app.use("/api/bookings", bookingRoutes);
-app.use("/api/calls", callsRoutes);
+app.use("/api/calls", callRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/admin/schedule", adminSchedulingRoutes);
 app.use("/api/recommendations", recommendationRoutes);

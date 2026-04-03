@@ -40,7 +40,7 @@ export async function getWeekly(req, res, next) {
       where.role = "USER";
       requestedUserId = where.userId;
     } else if (hasMentorId && !hasUserId) {
-      where.mentorId = String(mentorId).trim();
+      where.mentorId = String(targetMentorId).trim();
       where.role = "MENTOR";
       requestedMentorId = where.mentorId;
     } else if (!hasUserId && !hasMentorId) {
@@ -238,4 +238,49 @@ export async function saveBatch(req, res, next) {
   } catch (e) {
     next(e);
   }
+}
+
+/**
+ * Finds overlapping availability slots between a user and a mentor
+ */
+export async function findOverlappingSlots(userId, mentorId, startDate, endDate) {
+  const dateFilter = {};
+  if (startDate) dateFilter.gte = startDate;
+  if (endDate) dateFilter.lte = endDate;
+
+  const userSlots = await prisma.availability.findMany({
+    where: { userId, role: "USER", isBooked: false, ...(Object.keys(dateFilter).length > 0 ? { date: dateFilter } : {}) },
+    orderBy: { startTime: "asc" },
+  });
+
+  const mentorSlots = await prisma.availability.findMany({
+    where: { mentorId, role: "MENTOR", isBooked: false, ...(Object.keys(dateFilter).length > 0 ? { date: dateFilter } : {}) },
+    orderBy: { startTime: "asc" },
+  });
+
+  const overlaps = [];
+  const mentorSlotsByDate = {};
+  mentorSlots.forEach(s => {
+    const d = s.date.toISOString().slice(0, 10);
+    if (!mentorSlotsByDate[d]) mentorSlotsByDate[d] = [];
+    mentorSlotsByDate[d].push(s);
+  });
+
+  for (const u of userSlots) {
+    const d = u.date.toISOString().slice(0, 10);
+    const mDay = mentorSlotsByDate[d] || [];
+    for (const m of mDay) {
+      const start = u.startTime > m.startTime ? u.startTime : m.startTime;
+      const end = u.endTime < m.endTime ? u.endTime : m.endTime;
+      if (end.getTime() - start.getTime() >= 15 * 60 * 1000) {
+        overlaps.push({
+          date: u.date,
+          userSlot: { id: u.id, startTime: u.startTime, endTime: u.endTime },
+          mentorSlot: { id: m.id, startTime: m.startTime, endTime: m.endTime },
+          overlapPeriod: { startTime: start, endTime: end, durationMinutes: Math.round((end - start) / 60000) },
+        });
+      }
+    }
+  }
+  return overlaps;
 }

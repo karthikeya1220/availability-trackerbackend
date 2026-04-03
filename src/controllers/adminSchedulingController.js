@@ -497,6 +497,7 @@ export async function bookScheduledCall(req, res, next) {
       title,
       start_time,
       end_time,
+      call_type,
     } = req.body;
 
     // Validate required parameters
@@ -507,6 +508,7 @@ export async function bookScheduledCall(req, res, next) {
     if (!mentor_slot_id) missingParams.push("mentor_slot_id");
     if (!start_time) missingParams.push("start_time");
     if (!end_time) missingParams.push("end_time");
+    if (!call_type) missingParams.push("call_type");
 
     if (missingParams.length > 0) {
       return res.status(400).json({
@@ -641,24 +643,24 @@ export async function bookScheduledCall(req, res, next) {
     }
 
     // Validate slot ownership
-    if (userSlot.entityId !== user_id || userSlot.entityType !== "user") {
+    if (userSlot.userId !== user_id || userSlot.role !== "USER") {
       return res.status(400).json({
         error: `Slot "${user_slot_id}" does not belong to user "${user_id}"`,
         code: "SLOT_OWNERSHIP_MISMATCH",
         hint: "Select a slot that belongs to the specified user",
         slotId: user_slot_id,
-        slotOwnerId: userSlot.entityId,
+        slotOwnerId: userSlot.userId,
         requestedUserId: user_id,
       });
     }
 
-    if (mentorSlot.entityId !== mentor_id || mentorSlot.entityType !== "mentor") {
+    if (mentorSlot.mentorId !== mentor_id || mentorSlot.role !== "MENTOR") {
       return res.status(400).json({
         error: `Slot "${mentor_slot_id}" does not belong to mentor "${mentor_id}"`,
         code: "SLOT_OWNERSHIP_MISMATCH",
         hint: "Select a slot that belongs to the specified mentor",
         slotId: mentor_slot_id,
-        slotOwnerId: mentorSlot.entityId,
+        slotOwnerId: mentorSlot.mentorId,
         requestedMentorId: mentor_id,
       });
     }
@@ -731,29 +733,14 @@ export async function bookScheduledCall(req, res, next) {
         data: {
           id: uuidv4(),
           adminId: req.userId,
+          userId: user_id,
+          mentorId: mentor_id,
+          callType: call_type,
           title: title || `Call between ${user.name} and ${mentor.name}`,
           startTime: startTime,
           endTime: endTime,
         },
       });
-
-      // Add participants
-      await Promise.all([
-        tx.callParticipant.create({
-          data: {
-            id: uuidv4(),
-            callId: call.id,
-            userId: user_id,
-          },
-        }),
-        tx.callParticipant.create({
-          data: {
-            id: uuidv4(),
-            callId: call.id,
-            mentorId: mentor_id,
-          },
-        }),
-      ]);
 
       // Mark slots as booked
       const now = new Date();
