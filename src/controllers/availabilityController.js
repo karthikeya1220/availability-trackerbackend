@@ -12,12 +12,24 @@ import {
 
 export async function getWeekly(req, res, next) {
   try {
-    const { userId: targetUserId, mentorId, weekStart } = req.query;
+    const { userId, mentorId, entity_id, entity_type, weekStart } = req.query;
     const callerId = req.userId;
     const callerRole = req.userRole;
 
+    // Support both old (userId/mentorId) and new (entity_id/entity_type) keys
+    let targetUserId = userId;
+    let targetMentorId = mentorId;
+
+    if (entity_id) {
+      if (entity_type === "MENTOR") {
+        targetMentorId = entity_id;
+      } else {
+        targetUserId = entity_id;
+      }
+    }
+
     const hasUserId = targetUserId != null && String(targetUserId).trim() !== "";
-    const hasMentorId = mentorId != null && String(mentorId).trim() !== "";
+    const hasMentorId = targetMentorId != null && String(targetMentorId).trim() !== "";
 
     let where = {};
     let requestedUserId = null;
@@ -93,7 +105,7 @@ export async function getWeekly(req, res, next) {
 
 export async function saveBatch(req, res, next) {
   try {
-    const { slots } = req.body;
+    const { slots, entity_id, entity_type } = req.body;
     const callerId = req.userId;
     const role = req.userRole;
     if (!Array.isArray(slots)) {
@@ -105,8 +117,10 @@ export async function saveBatch(req, res, next) {
 
     for (const slot of slots) {
       const { date, startTime, endTime, enabled } = slot;
-      const targetUserId = slot.userId;
-      const targetMentorId = slot.mentorId;
+      
+      // Support both slot-level overrides and top-level overrides
+      let targetUserId = slot.userId || (entity_id && entity_type !== "MENTOR" ? entity_id : null);
+      let targetMentorId = slot.mentorId || (entity_id && entity_type === "MENTOR" ? entity_id : null);
 
       let saveAsUserId = null;
       let saveAsMentorId = null;
