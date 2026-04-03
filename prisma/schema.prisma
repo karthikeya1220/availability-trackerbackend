@@ -1,10 +1,12 @@
 generator client {
-  provider = "prisma-client-js"
+  provider        = "prisma-client-js"
+  previewFeatures = ["driverAdapters"]
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
 }
 
 enum Role {
@@ -13,9 +15,16 @@ enum Role {
   ADMIN
 }
 
-enum EntityType {
-  user
-  mentor
+enum CallType {
+  RESUME_REVAMP
+  JOB_MARKET_GUIDANCE
+  MOCK_INTERVIEW
+}
+
+enum CallStatus {
+  SCHEDULED
+  COMPLETED
+  CANCELLED
 }
 
 model User {
@@ -25,112 +34,95 @@ model User {
   password           String
   role               Role     @default(USER)
   timezone           String   @default("UTC")
+
+  // Shared metadata (managed by Admin for mentors; self-reported for users)
+  tags               String[] @default([])
+  domain             String?
+  description        String?
+
+  // Mentor-specific metadata
+  companyType        String?  @map("company_type")   // "big_tech" | "startup" | "mid_size"
+  communicationScore Float?   @default(0) @map("communication_score")
+
   createdAt          DateTime @default(now()) @map("created_at")
 
-  availabilities        Availability[]
-  callsAsAdmin          Call[]              @relation("AdminCalls")
-  callParticipantsAsUser   CallParticipant[] @relation("ParticipantAsUser")
-  callParticipantsAsMentor CallParticipant[] @relation("ParticipantAsMentor")
-  mentorProfile         MentorProfile?      @relation("MentorProfile")
-  userProfile           UserProfile?        @relation("UserProfile")
+  availabilityAsUser   Availability[] @relation("UserAvailability")
+  availabilityAsMentor Availability[] @relation("MentorAvailability")
+  meetingsAsAdmin      Meeting[]      @relation("AdminMeetings")
+  callsAsUser          Call[]         @relation("UserCalls")
+  callsAsMentor        Call[]         @relation("MentorCalls")
+  callsAsAdmin         Call[]         @relation("AdminCalls")
 }
 
 model Availability {
-  id          String     @id @default(uuid())
-  entityId    String     @map("entity_id")
-  entityType  EntityType @map("entity_type")
-  role        Role
-  date        DateTime   @db.Date
-  startTime   DateTime   @map("start_time")
-  endTime     DateTime   @map("end_time")
-  isBooked    Boolean    @default(false) @map("is_booked")
-  bookedAt    DateTime?  @map("booked_at")
-  createdAt   DateTime   @default(now()) @map("created_at")
+  id        String   @id @default(uuid())
+  userId    String?  @map("user_id")
+  mentorId  String?  @map("mentor_id")
+  role      Role
+  date      DateTime @db.Date
+  startTime DateTime @map("start_time")
+  endTime   DateTime @map("end_time")
+  createdAt DateTime @default(now()) @map("created_at")
 
-  user User @relation(fields: [entityId], references: [id], onDelete: Cascade)
+  user   User? @relation("UserAvailability",   fields: [userId],   references: [id], onDelete: Cascade)
+  mentor User? @relation("MentorAvailability", fields: [mentorId], references: [id], onDelete: Cascade)
 
-  @@unique([entityId, entityType, date, startTime], map: "availabilities_entity_id_type_date_start_time_key")
-  @@index([entityId], map: "availabilities_entity_id_idx")
-  @@index([entityType], map: "availabilities_entity_type_idx")
-  @@index([role], map: "availabilities_role_idx")
-  @@index([date], map: "availabilities_date_idx")
-  @@index([entityId, entityType], map: "availabilities_entity_id_type_idx")
-  @@index([entityId, date], map: "availabilities_entity_id_date_idx")
-  @@index([entityType, date], map: "availabilities_entity_type_date_idx")
-  @@index([role, date], map: "availabilities_role_date_idx")
+  @@unique([userId,   date, startTime], map: "availabilities_user_id_date_start_time_key")
+  @@unique([mentorId, date, startTime], map: "availabilities_mentor_id_date_start_time_key")
+  @@index([userId],       map: "availabilities_user_id_idx")
+  @@index([mentorId],     map: "availabilities_mentor_id_idx")
+  @@index([role],         map: "availabilities_role_idx")
+  @@index([date],         map: "availabilities_date_idx")
+  @@index([userId, date], map: "availabilities_user_id_date_idx")
+  @@index([mentorId, date], map: "availabilities_mentor_id_date_idx")
   @@map("availabilities")
 }
 
 model Call {
+  id         String     @id @default(uuid())
+  userId     String     @map("user_id")
+  mentorId   String     @map("mentor_id")
+  adminId    String     @map("admin_id")
+  callType   CallType   @map("call_type")
+  startTime  DateTime   @map("start_time")
+  endTime    DateTime   @map("end_time")
+  status     CallStatus @default(SCHEDULED)
+  notes      String?
+  createdAt  DateTime   @default(now()) @map("created_at")
+
+  user   User @relation("UserCalls",   fields: [userId],   references: [id], onDelete: Cascade)
+  mentor User @relation("MentorCalls", fields: [mentorId], references: [id], onDelete: Cascade)
+  admin  User @relation("AdminCalls",  fields: [adminId],  references: [id], onDelete: Cascade)
+
+  @@index([userId],   map: "calls_user_id_idx")
+  @@index([mentorId], map: "calls_mentor_id_idx")
+  @@index([adminId],  map: "calls_admin_id_idx")
+  @@index([status],   map: "calls_status_idx")
+  @@map("calls")
+}
+
+model Meeting {
   id              String   @id @default(uuid())
   adminId         String   @map("admin_id")
   title           String
   startTime       DateTime @map("start_time")
   endTime         DateTime @map("end_time")
+  meetLink        String?  @map("meet_link")
+  calendarEventId String?  @map("calendar_event_id")
+  googleEventId   String?  @map("google_event_id")
   createdAt       DateTime @default(now()) @map("created_at")
 
-  admin        User            @relation("AdminCalls", fields: [adminId], references: [id], onDelete: Cascade)
-  participants CallParticipant[]
-
-  @@map("calls")
+  admin        User                 @relation("AdminMeetings", fields: [adminId], references: [id], onDelete: Cascade)
+  participants MeetingParticipant[]
 }
 
-model CallParticipant {
-  id        String  @id @default(uuid())
-  callId    String  @map("call_id")
-  userId    String? @map("user_id")
-  mentorId  String? @map("mentor_id")
-  
-  // Keep email for backward compatibility during migration
-  email     String?
+model MeetingParticipant {
+  id        String @id @default(uuid())
+  meetingId String @map("meeting_id")
+  email     String
 
-  call   Call   @relation(fields: [callId], references: [id], onDelete: Cascade)
-  user   User?  @relation("ParticipantAsUser", fields: [userId], references: [id], onDelete: SetNull)
-  mentor User?  @relation("ParticipantAsMentor", fields: [mentorId], references: [id], onDelete: SetNull)
+  meeting Meeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
 
-  // At least one of userId or mentorId must be set
-  // Ensure userId and mentorId are unique per call (can't have same person twice)
-  @@unique([callId, userId], map: "call_participants_call_user_idx")
-  @@unique([callId, mentorId], map: "call_participants_call_mentor_idx")
-  @@index([userId], map: "call_participants_user_id_idx")
-  @@index([mentorId], map: "call_participants_mentor_id_idx")
-  @@map("call_participants")
-}
-
-model MentorProfile {
-  id                String   @id @default(uuid())
-  mentorId          String   @unique @map("mentor_id")
-  expertise         String[] @default([]) // Array of skill tags
-  description       String   @default("") // Detailed bio/description
-  company           String   @default("") // Company name
-  companySize       String   @default("") @map("company_size") // e.g., "50000+", "100-500"
-  communicationScore Float   @default(3.0) @map("communication_score") // 1-5 scale
-  rating            Float    @default(4.0) // 1-5 star rating
-  yearsOfExperience Int     @default(0) @map("years_of_experience")
-  createdAt         DateTime @default(now()) @map("created_at")
-  updatedAt         DateTime @updatedAt @map("updated_at")
-
-  mentor User @relation("MentorProfile", fields: [mentorId], references: [id], onDelete: Cascade)
-
-  @@index([mentorId], map: "mentor_profile_mentor_id_idx")
-  @@index([communicationScore], map: "mentor_profile_communication_score_idx")
-  @@index([rating], map: "mentor_profile_rating_idx")
-  @@map("mentor_profiles")
-}
-
-model UserProfile {
-  id            String   @id @default(uuid())
-  userId        String   @unique @map("user_id")
-  interests     String[] @default([]) // Array of interest tags
-  goal          String   @default("") // Primary learning goal
-  domain        String   @default("") // Domain/specialty area
-  description   String   @default("") // About user/background
-  createdAt     DateTime @default(now()) @map("created_at")
-  updatedAt     DateTime @updatedAt @map("updated_at")
-
-  user User @relation("UserProfile", fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([userId], map: "user_profile_user_id_idx")
-  @@index([domain], map: "user_profile_domain_idx")
-  @@map("user_profiles")
+  @@unique([meetingId, email])
+  @@map("meeting_participants")
 }

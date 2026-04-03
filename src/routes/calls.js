@@ -1,9 +1,23 @@
 import { Router } from "express";
-import { listCalls, deleteCall } from "../controllers/callsController.js";
+import {
+  bookCall,
+  listCalls,
+  getCall,
+  updateCallStatus,
+  deleteCall,
+} from "../controllers/callController.js";
 import { authenticate, requireRole } from "../middleware/auth.js";
 
-export const callsRoutes = Router();
+export const callRoutes = Router();
 
-callsRoutes.use(authenticate);
-callsRoutes.get("/", listCalls);
-callsRoutes.delete("/:id", requireRole("ADMIN"), deleteCall);
+// All calls routes require authentication
+callRoutes.use(authenticate);
+
+// Anyone authenticated can list/view their own calls
+callRoutes.get("/", listCalls);
+callRoutes.get("/:callId", getCall);
+
+// Only admin can book, update status, or cancel
+callRoutes.post("/", requireRole("ADMIN"), bookCall);
+callRoutes.patch("/:callId/status", requireRole("ADMIN"), updateCallStatus);
+callRoutes.delete("/:callId", requireRole("ADMIN"), deleteCall);

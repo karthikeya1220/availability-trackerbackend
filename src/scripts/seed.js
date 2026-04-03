@@ -1,405 +1,379 @@
-#!/usr/bin/env node
-
 /**
- * Database Seed Script
- * 
- * Populates the database with test data:
- * - 1 Admin user
- * - 5 Mentors with realistic profiles
- * - 10 Users with realistic profiles
- * - Availability slots for next 7 days
- * 
- * Usage:
- *   node scripts/seed.js
+ * Full seed script — creates:
+ *   1 Admin
+ *   5 Mentors (with full metadata for recommendation engine)
+ *   10 Users (with tags and descriptions)
+ *   Availability slots for all mentors and users (next 2 weeks)
+ *
+ * Run: node src/scripts/seed.js
  */
 
+import "dotenv/config";
 import bcrypt from "bcryptjs";
-import { DateTime } from "luxon";
-import { prisma } from "../lib/prisma.js";
+import { PrismaClient } from "@prisma/client";
+import { PrismaNeon } from "@prisma/adapter-neon";
+import { Pool, neonConfig } from "@neondatabase/serverless";
+import ws from "ws";
+import dns from "dns";
 import { v4 as uuidv4 } from "uuid";
 
-/**
- * Mentor profiles with expertise and descriptions
- */
-const MENTOR_PROFILES = [
-  {
-    name: "Dr. Sarah Chen",
-    email: "sarah.chen@tech.com",
-    expertise: ["React", "Node.js", "System Design"],
-    description: "Senior Software Engineer with 12+ years of experience in full-stack development and architectural design.",
-    company: "Google",
-    company_size: "50000+",
-    rating: 4.8,
-  },
-  {
-    name: "James Wilson",
-    email: "james.wilson@startup.com",
-    expertise: ["Product Management", "Growth Hacking", "Analytics"],
-    description: "Product Manager at fast-growing EdTech startup. Passionate about building products that scale.",
-    company: "TechFlow AI",
-    company_size: "100-500",
-    rating: 4.6,
-  },
-  {
-    name: "Priya Sharma",
-    email: "priya.sharma@finance.com",
-    expertise: ["Data Science", "Python", "Machine Learning"],
-    description: "ML Engineer specializing in recommendation systems and data analytics. PhD in Computer Science.",
-    company: "JPMorgan Chase",
-    company_size: "50000+",
-    rating: 4.9,
-  },
-  {
-    name: "Marcus Johnson",
-    email: "marcus.johnson@consulting.com",
-    expertise: ["Business Strategy", "Entrepreneurship", "Leadership"],
-    description: "Founder of 2 successful startups. Now advising next-gen entrepreneurs and helping them scale.",
-    company: "Founder Institute",
-    company_size: "200-1000",
-    rating: 4.7,
-  },
-  {
-    name: "Elena Rodriguez",
-    email: "elena.rodriguez@design.com",
-    expertise: ["UX Design", "Figma", "Design Systems"],
-    description: "Lead Product Designer at a design-forward company. Expert in creating scalable design systems.",
-    company: "Stripe",
-    company_size: "10000+",
-    rating: 4.85,
-  },
-];
+// DNS Shim: Bypass system DNS block of *.neon.tech
+const NEON_HOST = "ep-damp-frost-a4i8gsng.us-east-1.aws.neon.tech";
+const NEON_IP = "35.171.11.169";
 
-/**
- * User profiles with interests and goals
- */
-const USER_PROFILES = [
-  {
-    name: "Alex Kumar",
-    email: "alex.kumar@student.com",
-    interests: ["Web Development", "React", "JavaScript"],
-    goal: "Transition to tech from finance",
-  },
-  {
-    name: "Jordan Taylor",
-    email: "jordan.taylor@college.edu",
-    interests: ["Backend Development", "System Design", "DevOps"],
-    goal: "Prepare for senior engineering interviews",
-  },
-  {
-    name: "Casey O'Brien",
-    email: "casey.obrien@bootcamp.io",
-    interests: ["Full Stack", "Node.js", "MongoDB"],
-    goal: "Secure first tech job",
-  },
-  {
-    name: "Morgan Lee",
-    email: "morgan.lee@startup.io",
-    interests: ["Product Management", "Analytics", "SQL"],
-    goal: "Transition from engineering to product",
-  },
-  {
-    name: "Riley Chen",
-    email: "riley.chen@works.com",
-    interests: ["Machine Learning", "Python", "Data Science"],
-    goal: "Build AI/ML skills for current role",
-  },
-  {
-    name: "Dakota Smith",
-    email: "dakota.smith@company.com",
-    interests: ["Leadership", "Management", "Strategy"],
-    goal: "Prepare for team lead role",
-  },
-  {
-    name: "Sam Patel",
-    email: "sam.patel@business.com",
-    interests: ["Design", "UX", "Figma"],
-    goal: "Transition from graphic to product design",
-  },
-  {
-    name: "Avery Johnson",
-    email: "avery.johnson@creative.com",
-    interests: ["Startup Ideas", "Fundraising", "Entrepreneurship"],
-    goal: "Launch first startup",
-  },
-  {
-    name: "Quinn Martinez",
-    email: "quinn.martinez@tech.io",
-    interests: ["Data Engineering", "BigQuery", "Cloud Architecture"],
-    goal: "Specialize in data infrastructure",
-  },
-  {
-    name: "Taylor Brown",
-    email: "taylor.brown@student.edu",
-    interests: ["Web Design", "Frontend", "CSS"],
-    goal: "Build portfolio projects",
-  },
-];
-
-/**
- * Generate availability slots for a user/mentor
- * Creates 2-3 slots per day for the next 7 days
- */
-function generateAvailabilitySlots(userId, role, entityType) {
-  const slots = [];
-  const now = DateTime.now().startOf("day").plus({ days: 1 }); // Start from tomorrow
-
-  // Time slots in 24-hour format
-  const TIME_SLOTS = [
-    { start: "09:00", end: "10:00" },
-    { start: "10:00", end: "11:00" },
-    { start: "14:00", end: "15:00" },
-    { start: "15:00", end: "16:00" },
-    { start: "16:00", end: "17:00" },
-    { start: "18:00", end: "19:00" },
-  ];
-
-  // Generate slots for next 7 days
-  for (let dayOffset = 0; dayOffset < 7; dayOffset++) {
-    const date = now.plus({ days: dayOffset });
-    const dayOfWeek = date.weekday; // 1=Monday, 7=Sunday
-
-    // Skip weekends for mentors, include weekends for users
-    if (role === "MENTOR" && (dayOfWeek === 6 || dayOfWeek === 7)) {
-      continue;
+const originalLookup = dns.lookup;
+dns.lookup = (hostname, options, callback) => {
+  if (hostname === NEON_HOST) {
+    const cb = typeof options === "function" ? options : callback;
+    const opts = typeof options === "object" ? options : {};
+    if (opts.all) {
+      return cb(null, [{ address: NEON_IP, family: 4 }], 4);
     }
+    return cb(null, NEON_IP, 4);
+  }
+  return originalLookup(hostname, options, callback);
+};
 
-    // Randomly select 2-3 time slots per day
-    const shuffled = TIME_SLOTS.sort(() => Math.random() - 0.5);
-    const slotsForDay = shuffled.slice(0, Math.random() > 0.5 ? 2 : 3);
+// Configure Neon for WebSocket support (port 443)
+neonConfig.webSocketConstructor = ws;
+const connectionString = process.env.DATABASE_URL;
+const pool = new Pool({ connectionString });
+const adapter = new PrismaNeon(pool);
+const prisma = new PrismaClient({ adapter });
 
-    slotsForDay.forEach((slot) => {
-      const startTime = date.set({
-        hour: parseInt(slot.start.split(":")[0]),
-        minute: parseInt(slot.start.split(":")[1]),
-      });
+// ─── Helpers ────────────────────────────────────────────────────────────────
 
-      const endTime = date.set({
-        hour: parseInt(slot.end.split(":")[0]),
-        minute: parseInt(slot.end.split(":")[1]),
-      });
+async function hash(pw) {
+  return bcrypt.hash(pw, 12);
+}
 
-      slots.push({
-        id: uuidv4(),
-        entityId: userId,
-        entityType,
-        role,
-        date: date.toJSDate(),
-        startTime: startTime.toJSDate(),
-        endTime: endTime.toJSDate(),
-        isBooked: false,
-        bookedAt: null,
-        createdAt: new Date(),
-      });
-    });
+/** Returns UTC midnight Date for a date string YYYY-MM-DD */
+function utcDate(str) {
+  return new Date(str + "T00:00:00.000Z");
+}
+
+/** Returns next Monday from today */
+function nextMonday() {
+  const d = new Date();
+  const day = d.getUTCDay();
+  const diff = day === 0 ? 1 : 8 - day;
+  d.setUTCDate(d.getUTCDate() + diff);
+  d.setUTCHours(0, 0, 0, 0);
+  return d;
+}
+
+/** Build N consecutive hourly slot pairs starting at UTC hour H on dateStr */
+function buildSlots(dateStr, hours) {
+  return hours.map((h) => {
+    const start = new Date(`${dateStr}T${String(h).padStart(2, "0")}:00:00.000Z`);
+    const end = new Date(start.getTime() + 60 * 60 * 1000);
+    return { start, end };
+  });
+}
+
+/** Get YYYY-MM-DD string for a date offset by N days from base */
+function dateStr(base, offsetDays) {
+  const d = new Date(base);
+  d.setUTCDate(d.getUTCDate() + offsetDays);
+  return d.toISOString().slice(0, 10);
+}
+
+// ─── Data ────────────────────────────────────────────────────────────────────
+
+const ADMIN = {
+  name: process.env.ADMIN_NAME || "Admin User",
+  email: (process.env.ADMIN_EMAIL || "admin@mentorque.com").toLowerCase(),
+  password: process.env.ADMIN_PASSWORD || "admin123456",
+};
+
+const MENTORS = [
+  {
+    name: "Arjun Sharma",
+    email: "arjun.sharma@mentorque.com",
+    password: "mentor123",
+    timezone: "Asia/Kolkata",
+    tags: ["tech", "big_tech", "backend", "india", "senior_developer"],
+    domain: "backend",
+    description:
+      "Senior Software Engineer at Google with 8 years of experience in distributed systems, Java, and Go. Strong track record helping candidates crack FAANG interviews.",
+    companyType: "big_tech",
+    communicationScore: 4.5,
+    // Availability: Mon–Fri 9–12 UTC (next 2 weeks)
+    availHours: [9, 10, 11],
+    availDays: [0, 1, 2, 3, 4, 7, 8, 9, 10, 11], // offset from base Monday
+  },
+  {
+    name: "Priya Nair",
+    email: "priya.nair@mentorque.com",
+    password: "mentor123",
+    timezone: "Asia/Kolkata",
+    tags: ["tech", "big_tech", "frontend", "india", "good_communication"],
+    domain: "frontend",
+    description:
+      "Staff Engineer at Meta specialising in React, TypeScript, and design systems. Known for her exceptional communication and coaching style.",
+    companyType: "big_tech",
+    communicationScore: 4.8,
+    availHours: [10, 11, 14],
+    availDays: [0, 1, 2, 3, 4, 7, 8, 9, 10, 11],
+  },
+  {
+    name: "Rahul Verma",
+    email: "rahul.verma@mentorque.com",
+    password: "mentor123",
+    timezone: "Asia/Kolkata",
+    tags: ["tech", "startup", "fullstack", "india", "good_communication"],
+    domain: "fullstack",
+    description:
+      "CTO of an early-stage SaaS startup. Deep expertise in product strategy, startup recruitment, and job market trends in India. Great communicator — students consistently rate him 4.9/5.",
+    companyType: "startup",
+    communicationScore: 4.9,
+    availHours: [8, 9, 15],
+    availDays: [0, 2, 4, 7, 9, 11],
+  },
+  {
+    name: "Sneha Iyer",
+    email: "sneha.iyer@mentorque.com",
+    password: "mentor123",
+    timezone: "Europe/Dublin",
+    tags: ["tech", "big_tech", "ml", "ireland", "senior_developer"],
+    domain: "ml",
+    description:
+      "Machine Learning Engineer at Amazon Dublin. Specialises in NLP and recommendation systems. Has helped 30+ candidates prepare for ML roles at top companies.",
+    companyType: "big_tech",
+    communicationScore: 4.2,
+    availHours: [9, 13, 14],
+    availDays: [1, 3, 5, 8, 10],
+  },
+  {
+    name: "Kiran Reddy",
+    email: "kiran.reddy@mentorque.com",
+    password: "mentor123",
+    timezone: "Asia/Kolkata",
+    tags: ["tech", "mid_size", "devops", "india", "good_communication"],
+    domain: "devops",
+    description:
+      "DevOps Lead at Infosys Digital with expertise in Kubernetes, CI/CD pipelines, and cloud infrastructure. Excellent communicator with strong interview coaching skills.",
+    companyType: "mid_size",
+    communicationScore: 4.6,
+    availHours: [10, 11, 16],
+    availDays: [0, 1, 2, 3, 4, 7, 8, 9, 10, 11],
+  },
+];
+
+const USERS = [
+  {
+    name: "Aditya Kumar",
+    email: "aditya.kumar@example.com",
+    password: "user123456",
+    timezone: "Asia/Kolkata",
+    tags: ["tech", "backend", "india"],
+    domain: "backend",
+    description:
+      "3 years of experience in Python and Django. Looking to crack a backend role at a big tech company. Needs help with system design and resume revision.",
+    availHours: [9, 10, 11, 14],
+    availDays: [0, 1, 2, 3, 4, 7, 8, 9, 10, 11],
+  },
+  {
+    name: "Meera Pillai",
+    email: "meera.pillai@example.com",
+    password: "user123456",
+    timezone: "Asia/Kolkata",
+    tags: ["tech", "frontend", "india", "asks_a_lot_of_questions"],
+    domain: "frontend",
+    description:
+      "Junior frontend developer with React experience. Wants mock interviews for frontend roles at product companies. Very inquisitive.",
+    availHours: [10, 11, 15],
+    availDays: [0, 2, 4, 7, 9, 11],
+  },
+  {
+    name: "Suresh Babu",
+    email: "suresh.babu@example.com",
+    password: "user123456",
+    timezone: "Asia/Kolkata",
+    tags: ["tech", "ml", "india"],
+    domain: "ml",
+    description:
+      "Final year PhD student in deep learning. Looking for guidance on transitioning to industry ML roles. Particularly interested in NLP positions.",
+    availHours: [8, 9, 13],
+    availDays: [1, 3, 5, 8, 10],
+  },
+  {
+    name: "Divya Menon",
+    email: "divya.menon@example.com",
+    password: "user123456",
+    timezone: "Asia/Kolkata",
+    tags: ["tech", "fullstack", "india", "good_communication"],
+    domain: "fullstack",
+    description:
+      "2 years of startup experience. Looking for job market guidance on switching to larger companies. Good communicator.",
+    availHours: [10, 14, 15],
+    availDays: [0, 1, 2, 7, 8, 9],
+  },
+  {
+    name: "Rohan Gupta",
+    email: "rohan.gupta@example.com",
+    password: "user123456",
+    timezone: "Asia/Kolkata",
+    tags: ["tech", "devops", "india", "asks_a_lot_of_questions"],
+    domain: "devops",
+    description:
+      "SRE with 1 year experience. Wants mock interviews for senior DevOps roles. Has many questions about cloud architecture.",
+    availHours: [9, 10, 16],
+    availDays: [0, 1, 3, 7, 8, 10],
+  },
+  {
+    name: "Ananya Singh",
+    email: "ananya.singh@example.com",
+    password: "user123456",
+    timezone: "Asia/Kolkata",
+    tags: ["tech", "backend", "india"],
+    domain: "backend",
+    description:
+      "Recently laid off senior developer. Needs resume revamp and job market guidance. 6 years of Java backend experience.",
+    availHours: [9, 11, 14],
+    availDays: [0, 2, 4, 7, 9, 11],
+  },
+  {
+    name: "Vikram Patel",
+    email: "vikram.patel@example.com",
+    password: "user123456",
+    timezone: "Asia/Kolkata",
+    tags: ["tech", "frontend", "india"],
+    domain: "frontend",
+    description:
+      "3 years of Angular and Vue experience. Wants guidance on switching to React ecosystem and landing a job at a big tech company.",
+    availHours: [10, 11, 13],
+    availDays: [1, 2, 3, 8, 9, 10],
+  },
+  {
+    name: "Nisha Kapoor",
+    email: "nisha.kapoor@example.com",
+    password: "user123456",
+    timezone: "Asia/Kolkata",
+    tags: ["tech", "ml", "india", "good_communication"],
+    domain: "ml",
+    description:
+      "Data scientist with 4 years in banking sector. Looking to move to a product company ML role. Needs mock interviews and resume revamp.",
+    availHours: [8, 10, 14],
+    availDays: [0, 1, 4, 7, 8, 11],
+  },
+  {
+    name: "Aryan Joshi",
+    email: "aryan.joshi@example.com",
+    password: "user123456",
+    timezone: "Asia/Kolkata",
+    tags: ["tech", "fullstack", "ireland"],
+    domain: "fullstack",
+    description:
+      "Moved to Ireland recently. Needs job market guidance specifically for the Irish/European tech market. 5 years of full-stack experience.",
+    availHours: [9, 13, 14],
+    availDays: [2, 3, 5, 9, 10],
+  },
+  {
+    name: "Lakshmi Rao",
+    email: "lakshmi.rao@example.com",
+    password: "user123456",
+    timezone: "Asia/Kolkata",
+    tags: ["tech", "devops", "india"],
+    domain: "devops",
+    description:
+      "Cloud engineer with AWS certifications. Wants a resume revamp and mock interview prep for DevOps architect roles.",
+    availHours: [10, 11, 15],
+    availDays: [0, 1, 2, 7, 8, 9],
+  },
+];
+
+// ─── Seed Functions ───────────────────────────────────────────────────────────
+
+async function upsertUser(data) {
+  const existing = await prisma.user.findUnique({ where: { email: data.email } });
+  if (existing) {
+    return prisma.user.update({ where: { email: data.email }, data });
+  }
+  return prisma.user.create({ data: { ...data, id: uuidv4() } });
+}
+
+async function seedAvailability(userId, role, availDays, availHours, baseMonday) {
+  // Clear existing future availability for this user/role
+  if (role === "MENTOR") {
+    await prisma.availability.deleteMany({ where: { mentorId: userId, role: "MENTOR" } });
+  } else {
+    await prisma.availability.deleteMany({ where: { userId, role: "USER" } });
   }
 
-  return slots;
-}
-
-/**
- * Hash password using bcrypt
- */
-async function hashPassword(password) {
-  const salt = await bcrypt.genSalt(10);
-  return bcrypt.hash(password, salt);
-}
-
-/**
- * Create admin user
- */
-async function createAdmin() {
-  console.log("\n👤 Creating admin user...");
-
-  const hashedPassword = await hashPassword("Admin@12345");
-
-  const admin = await prisma.user.create({
-    data: {
-      id: uuidv4(),
-      name: "Admin User",
-      email: "admin@mentorque.com",
-      password: hashedPassword,
-      role: "ADMIN",
-      timezone: "UTC",
-    },
-  });
-
-  console.log(`   ✅ Admin created: ${admin.email}`);
-  return admin;
-}
-
-/**
- * Create mentor users with availability
- */
-async function createMentors() {
-  console.log("\n🎓 Creating mentors...");
-
-  const mentors = [];
-
-  for (const profile of MENTOR_PROFILES) {
-    const hashedPassword = await hashPassword("Mentor@12345");
-
-    const mentor = await prisma.user.create({
-      data: {
-        id: uuidv4(),
-        name: profile.name,
-        email: profile.email,
-        password: hashedPassword,
-        role: "MENTOR",
-        timezone: "UTC",
-      },
-    });
-
-    // Generate availability slots for this mentor
-    const availabilitySlots = generateAvailabilitySlots(
-      mentor.id,
-      "MENTOR",
-      "mentor"
-    );
-
-    await prisma.availability.createMany({
-      data: availabilitySlots,
-    });
-
-    console.log(
-      `   ✅ ${profile.name} (${profile.company}) - ${profile.expertise.join(", ")}`
-    );
-    console.log(
-      `      📅 ${availabilitySlots.length} availability slots created`
-    );
-
-    mentors.push({
-      ...mentor,
-      profile,
-    });
+  for (const dayOffset of availDays) {
+    const ds = dateStr(baseMonday, dayOffset);
+    const slots = buildSlots(ds, availHours);
+    for (const slot of slots) {
+      await prisma.availability.create({
+        data: {
+          id: uuidv4(),
+          userId: role === "USER" ? userId : null,
+          mentorId: role === "MENTOR" ? userId : null,
+          role,
+          date: utcDate(ds),
+          startTime: slot.start,
+          endTime: slot.end,
+        },
+      });
+    }
   }
-
-  return mentors;
 }
 
-/**
- * Create regular users with availability
- */
-async function createUsers() {
-  console.log("\n👥 Creating users...");
+// ─── Main ─────────────────────────────────────────────────────────────────────
 
-  const users = [];
-
-  for (const profile of USER_PROFILES) {
-    const hashedPassword = await hashPassword("User@12345");
-
-    const user = await prisma.user.create({
-      data: {
-        id: uuidv4(),
-        name: profile.name,
-        email: profile.email,
-        password: hashedPassword,
-        role: "USER",
-        timezone: "UTC",
-      },
-    });
-
-    // Generate availability slots for this user
-    const availabilitySlots = generateAvailabilitySlots(user.id, "USER", "user");
-
-    await prisma.availability.createMany({
-      data: availabilitySlots,
-    });
-
-    console.log(
-      `   ✅ ${profile.name} (Goal: ${profile.goal})`
-    );
-    console.log(
-      `      📚 Interests: ${profile.interests.join(", ")}`
-    );
-    console.log(
-      `      📅 ${availabilitySlots.length} availability slots created`
-    );
-
-    users.push({
-      ...user,
-      profile,
-    });
-  }
-
-  return users;
-}
-
-/**
- * Generate summary statistics
- */
-async function printSummary() {
-  console.log("\n" + "=".repeat(70));
-  console.log("📊 SEED SUMMARY");
-  console.log("=".repeat(70));
-
-  const userCount = await prisma.user.count();
-  const adminCount = await prisma.user.count({ where: { role: "ADMIN" } });
-  const mentorCount = await prisma.user.count({ where: { role: "MENTOR" } });
-  const userCountRegular = await prisma.user.count({ where: { role: "USER" } });
-  const availabilityCount = await prisma.availability.count();
-
-  console.log(`\n👤 Users Created:`);
-  console.log(`   • Total: ${userCount}`);
-  console.log(`   • Admins: ${adminCount}`);
-  console.log(`   • Mentors: ${mentorCount}`);
-  console.log(`   • Regular Users: ${userCountRegular}`);
-
-  console.log(`\n📅 Availability Slots Created:`);
-  console.log(`   • Total: ${availabilityCount}`);
-
-  const slotsByRole = await prisma.availability.groupBy({
-    by: ["role"],
-    _count: true,
-  });
-
-  slotsByRole.forEach((slot) => {
-    console.log(`   • ${slot.role}s: ${slot._count}`);
-  });
-
-  console.log(`\n🎓 Mentors by Expertise:`);
-  MENTOR_PROFILES.forEach((profile) => {
-    console.log(`   • ${profile.name}: ${profile.expertise.join(", ")}`);
-  });
-
-  console.log(`\n🔐 Default Passwords:`);
-  console.log(`   • Admin: Admin@12345`);
-  console.log(`   • Mentors: Mentor@12345`);
-  console.log(`   • Users: User@12345`);
-
-  console.log(`\n📅 Availability: Next 7 days (2-3 slots per day)`);
-  console.log(`   • Mentors: Weekdays only (Mon-Fri)`);
-  console.log(`   • Users: All days (including weekends)`);
-
-  console.log("\n" + "=".repeat(70));
-  console.log("✅ Database seed completed successfully!");
-  console.log("=".repeat(70) + "\n");
-}
-
-/**
- * Main seed function
- */
 async function main() {
-  console.log("\n🌱 Starting database seed...\n");
+  const base = nextMonday();
+  console.log(`\n🌱 Seeding database... (base week: ${base.toISOString().slice(0, 10)})\n`);
 
-  try {
-    // Create admin
-    await createAdmin();
+  // ── Admin ──
+  const adminUser = await upsertUser({
+    name: ADMIN.name,
+    email: ADMIN.email,
+    password: await hash(ADMIN.password),
+    role: "ADMIN",
+    timezone: "UTC",
+    tags: [],
+  });
+  console.log(`✅ Admin: ${adminUser.email}`);
 
-    // Create mentors
-    await createMentors();
-
-    // Create users
-    await createUsers();
-
-    // Print summary
-    await printSummary();
-  } catch (error) {
-    console.error("❌ Seed failed:", error);
-    process.exit(1);
-  } finally {
-    await prisma.$disconnect();
+  // ── Mentors ──
+  for (const m of MENTORS) {
+    const { availHours, availDays, password, ...profile } = m;
+    const mentor = await upsertUser({
+      ...profile,
+      email: profile.email.toLowerCase(),
+      password: await hash(password),
+      role: "MENTOR",
+    });
+    await seedAvailability(mentor.id, "MENTOR", availDays, availHours, base);
+    console.log(`✅ Mentor: ${mentor.email} (${availDays.length} days × ${availHours.length} slots)`);
   }
+
+  // ── Users ──
+  for (const u of USERS) {
+    const { availHours, availDays, password, ...profile } = u;
+    const user = await upsertUser({
+      ...profile,
+      email: profile.email.toLowerCase(),
+      password: await hash(password),
+      role: "USER",
+    });
+    await seedAvailability(user.id, "USER", availDays, availHours, base);
+    console.log(`✅ User: ${user.email} (${availDays.length} days × ${availHours.length} slots)`);
+  }
+
+  console.log("\n✨ Seed complete!\n");
+  console.log("─── Login credentials ─────────────────────────");
+  console.log(`Admin:   ${ADMIN.email} / ${ADMIN.password}`);
+  console.log(`Mentors: *@mentorque.com / mentor123`);
+  console.log(`Users:   *@example.com  / user123456`);
+  console.log("───────────────────────────────────────────────\n");
 }
 
-// Run the seed
-main();
+main()
+  .catch((e) => {
+    console.error("❌ Seed failed:", e);
+    process.exit(1);
+  })
+  .finally(() => prisma.$disconnect());

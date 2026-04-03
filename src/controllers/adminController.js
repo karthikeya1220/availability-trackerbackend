@@ -8,7 +8,16 @@ export async function listUsers(req, res, next) {
   try {
     const users = await prisma.user.findMany({
       where: { role: "USER" },
-      select: { id: true, name: true, email: true, timezone: true, createdAt: true },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        timezone: true,
+        tags: true,
+        domain: true,
+        description: true,
+        createdAt: true,
+      },
       orderBy: { name: "asc" },
     });
     res.json(users);
@@ -21,7 +30,18 @@ export async function listMentors(req, res, next) {
   try {
     const mentors = await prisma.user.findMany({
       where: { role: "MENTOR" },
-      select: { id: true, name: true, email: true, timezone: true, createdAt: true },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        timezone: true,
+        tags: true,
+        domain: true,
+        description: true,
+        companyType: true,
+        communicationScore: true,
+        createdAt: true,
+      },
       orderBy: { name: "asc" },
     });
     res.json(mentors);
@@ -59,9 +79,91 @@ export async function createUser(req, res, next) {
         role,
         timezone: "UTC",
       },
-      select: { id: true, name: true, email: true, role: true, timezone: true, createdAt: true },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        role: true,
+        timezone: true,
+        tags: true,
+        domain: true,
+        description: true,
+        companyType: true,
+        communicationScore: true,
+        createdAt: true,
+      },
     });
     res.status(201).json(user);
+  } catch (e) {
+    next(e);
+  }
+}
+
+export async function updateMentorProfile(req, res, next) {
+  try {
+    const { mentorId } = req.params;
+    const { tags, domain, description, companyType, communicationScore } = req.body;
+
+    const mentor = await prisma.user.findUnique({ where: { id: mentorId } });
+    if (!mentor || mentor.role !== "MENTOR") {
+      return res.status(404).json({ error: "Mentor not found" });
+    }
+
+    const updated = await prisma.user.update({
+      where: { id: mentorId },
+      data: {
+        ...(tags !== undefined && { tags }),
+        ...(domain !== undefined && { domain }),
+        ...(description !== undefined && { description }),
+        ...(companyType !== undefined && { companyType }),
+        ...(communicationScore !== undefined && { communicationScore: parseFloat(communicationScore) }),
+      },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        timezone: true,
+        tags: true,
+        domain: true,
+        description: true,
+        companyType: true,
+        communicationScore: true,
+      },
+    });
+    res.json(updated);
+  } catch (e) {
+    next(e);
+  }
+}
+
+export async function updateUserProfile(req, res, next) {
+  try {
+    const { userId } = req.params;
+    const { tags, domain, description } = req.body;
+
+    const user = await prisma.user.findUnique({ where: { id: userId } });
+    if (!user || user.role !== "USER") {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    const updated = await prisma.user.update({
+      where: { id: userId },
+      data: {
+        ...(tags !== undefined && { tags }),
+        ...(domain !== undefined && { domain }),
+        ...(description !== undefined && { description }),
+      },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        timezone: true,
+        tags: true,
+        domain: true,
+        description: true,
+      },
+    });
+    res.json(updated);
   } catch (e) {
     next(e);
   }
@@ -84,8 +186,8 @@ export async function getAvailabilityForUser(req, res, next) {
     const slots = await prisma.availability.findMany({
       where: {
         OR: [
-          { entityId: userId, entityType: "user", role: "USER" },
-          { entityId: userId, entityType: "mentor", role: "MENTOR" },
+          { userId, role: "USER" },
+          { mentorId: userId, role: "MENTOR" },
         ],
         date: { gte: weekStartDate, lt: new Date(weekStartDate.getTime() + 7 * 24 * 60 * 60 * 1000) },
       },
@@ -104,11 +206,7 @@ export async function getAvailabilityForUser(req, res, next) {
       });
     });
 
-    res.json({
-      weekStart: weekStartDate.toISOString().slice(0, 10),
-      dates,
-      availability: byDate,
-    });
+    res.json({ weekStart: weekStartDate.toISOString().slice(0, 10), dates, availability: byDate });
   } catch (e) {
     next(e);
   }
@@ -140,8 +238,8 @@ export async function getOverlappingSlots(req, res, next) {
     const slots = await prisma.availability.findMany({
       where: {
         OR: [
-          { entityId: userId, entityType: "user", role: "USER" },
-          { entityId: userId, entityType: "mentor", role: "MENTOR" },
+          { userId, role: "USER" },
+          { mentorId: userId, role: "MENTOR" },
         ],
       },
       orderBy: [{ date: "asc" }, { startTime: "asc" }],
@@ -157,16 +255,10 @@ export async function getOverlappingSlots(req, res, next) {
   }
 }
 
-/**
- * Schedule a meeting/call with participants
- * Supports both:
- * - Legacy: participantEmails (array of email strings) - backward compatible
- * - New: participants (array of { userId?, mentorId?, email? })
- */
 export async function scheduleMeeting(req, res, next) {
   try {
     const adminId = req.userId;
-    const { title, startTime, endTime, date, timezone, participantEmails, participants } = req.body;
+    const { title, startTime, endTime, date, timezone, participantEmails } = req.body;
 
     if (!title?.trim()) {
       return res.status(400).json({ error: "title is required" });
@@ -174,23 +266,27 @@ export async function scheduleMeeting(req, res, next) {
 
     let start;
     let end;
-    // IANA timezone (e.g. "Asia/Kolkata" or "UTC"). DB always stores UTC.
-    let requestTimezone = "UTC";
 
-    if (date && timezone && typeof startTime === "string" && typeof endTime === "string" && /^\d{2}:\d{2}$/.test(startTime) && /^\d{2}:\d{2}$/.test(endTime)) {
+    if (
+      date &&
+      timezone &&
+      typeof startTime === "string" &&
+      typeof endTime === "string" &&
+      /^\d{2}:\d{2}$/.test(startTime) &&
+      /^\d{2}:\d{2}$/.test(endTime)
+    ) {
       const startDt = DateTime.fromFormat(`${date} ${startTime}`, "dd-MM-yyyy HH:mm", { zone: timezone });
       const endDt = DateTime.fromFormat(`${date} ${endTime}`, "dd-MM-yyyy HH:mm", { zone: timezone });
       if (!startDt.isValid || !endDt.isValid) {
-        return res.status(400).json({ error: "Invalid date or time. Use dd-MM-yyyy and HH:mm in the selected timezone." });
+        return res.status(400).json({ error: "Invalid date or time format. Use dd-MM-yyyy and HH:mm." });
       }
       start = startDt.toJSDate();
       end = endDt.toJSDate();
-      requestTimezone = timezone;
     } else if (startTime && endTime) {
       start = new Date(startTime);
       end = new Date(endTime);
     } else {
-      return res.status(400).json({ error: "startTime and endTime are required (or date, startTime, endTime, timezone)." });
+      return res.status(400).json({ error: "startTime and endTime are required." });
     }
 
     if (start >= end) {
@@ -200,79 +296,33 @@ export async function scheduleMeeting(req, res, next) {
       return res.status(400).json({ error: "Cannot schedule meeting in the past" });
     }
 
-    // Create call in DB
-    const call = await prisma.call.create({
+    const emails = Array.isArray(participantEmails)
+      ? participantEmails.map((e) => (typeof e === "string" ? e.trim() : "")).filter(Boolean)
+      : [];
+
+    const meeting = await prisma.meeting.create({
       data: {
         id: uuidv4(),
         adminId,
         title: title.trim(),
         startTime: start,
         endTime: end,
+        meetLink: null,
+        calendarEventId: null,
+        googleEventId: null,
       },
     });
 
-    // Process participants (supports both new ID-based and legacy email-based)
-    let participantData = [];
-
-    // New format: array of objects with userId/mentorId
-    if (Array.isArray(participants) && participants.length > 0) {
-      participantData = participants
-        .map((p) => {
-          const userId = typeof p === "object" ? p.userId : undefined;
-          const mentorId = typeof p === "object" ? p.mentorId : undefined;
-          const email = typeof p === "object" ? p.email : undefined;
-
-          // Validate: at least userId or mentorId must be provided
-          if (!userId && !mentorId) {
-            throw new Error("Each participant must have userId or mentorId");
-          }
-
-          return {
-            id: uuidv4(),
-            callId: call.id,
-            userId: userId || null,
-            mentorId: mentorId || null,
-            email: email || null,
-          };
-        });
-    }
-    // Legacy format: array of email strings (backward compatible)
-    else if (Array.isArray(participantEmails) && participantEmails.length > 0) {
-      const emails = participantEmails
-        .map((e) => (typeof e === "string" ? e.trim() : ""))
-        .filter(Boolean);
-
-      participantData = emails.map((email) => ({
-        id: uuidv4(),
-        callId: call.id,
-        userId: null,
-        mentorId: null,
-        email,
-      }));
-    }
-
-    // Create participants
-    if (participantData.length > 0) {
-      await prisma.callParticipant.createMany({
-        data: participantData,
+    if (emails.length > 0) {
+      await prisma.meetingParticipant.createMany({
+        data: emails.map((email) => ({ id: uuidv4(), meetingId: meeting.id, email })),
         skipDuplicates: true,
       });
     }
 
-    const withParticipants = await prisma.call.findUnique({
-      where: { id: call.id },
-      include: {
-        participants: {
-          include: {
-            user: {
-              select: { id: true, name: true, email: true, role: true },
-            },
-            mentor: {
-              select: { id: true, name: true, email: true, role: true },
-            },
-          },
-        },
-      },
+    const withParticipants = await prisma.meeting.findUnique({
+      where: { id: meeting.id },
+      include: { participants: true },
     });
 
     res.status(201).json(withParticipants);
@@ -280,6 +330,3 @@ export async function scheduleMeeting(req, res, next) {
     next(e);
   }
 }
-
-// Alias for new API endpoint
-export const bookCall = scheduleMeeting;
