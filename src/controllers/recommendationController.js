@@ -7,7 +7,7 @@
 import { prisma } from "../lib/prisma.js";
 import {
   recommendMentors,
-  getRecommendationReport,
+  getRecommendationReport as generateRecommendationReport,
 } from "../services/mentorRecommendation.js";
 
 /**
@@ -154,13 +154,16 @@ export async function getRecommendationReport(req, res, next) {
       }));
 
     // Get full report
-    const report = getRecommendationReport(
+    const report = generateRecommendationReport(
       userRecord.userProfile,
       mentorProfiles,
       callType
     );
 
-    res.json(report);
+    res.json({
+      success: true,
+      data: report,
+    });
   } catch (err) {
     next(err);
   }

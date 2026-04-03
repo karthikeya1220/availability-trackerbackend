@@ -8,7 +8,7 @@
  */
 
 import express from "express";
-import { authenticateToken } from "../middleware/auth.js";
+import { authenticate } from "../middleware/auth.js";
 import {
   getSchedulingRecommendations,
   getSchedulingOverlaps,
@@ -18,7 +18,7 @@ import {
 const router = express.Router();
 
 // All admin scheduling routes require authentication
-router.use(authenticateToken);
+router.use(authenticate);
 
 /**
  * Step 1: Get mentor recommendations for a user

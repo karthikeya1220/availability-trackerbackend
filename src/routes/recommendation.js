@@ -5,7 +5,7 @@
  */
 
 import express from "express";
-import { authenticateToken } from "../middleware/auth.js";
+import { authenticate } from "../middleware/auth.js";
 import {
   getRecommendations,
   getRecommendationReport,
@@ -19,7 +19,7 @@ import {
 const router = express.Router();
 
 // All recommendation routes require authentication
-router.use(authenticateToken);
+router.use(authenticate);
 
 // Get recommendations for a user
 // GET /recommendations?userId=xxx&limit=5&callType=resume_revamp
