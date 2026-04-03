@@ -9,7 +9,10 @@ import { v4 as uuidv4 } from "uuid";
 export async function bookCall(req, res, next) {
   try {
     const adminId = req.userId;
-    const { userId, mentorId, callType, startTime, endTime, notes } = req.body;
+    const { userId, mentorId, callType, startTime, endTime, notes, title } = req.body;
+    
+    // Generate a mock meet link for product demonstration
+    const mockMeetLink = `https://meet.google.com/${uuidv4().slice(0, 3)}-${uuidv4().slice(0, 4)}-${uuidv4().slice(0, 3)}`;
     
     console.log("DEBUG: bookCall payload:", JSON.stringify(req.body, null, 2));
 
@@ -95,9 +98,11 @@ export async function bookCall(req, res, next) {
         mentorId,
         adminId,
         callType: normalizedCallType,
+        title: title?.trim() || `Mentoring: ${normalizedCallType.replace(/_/g, " ")}`,
         startTime: start,
         endTime: end,
         status: "SCHEDULED",
+        meetLink: req.body.meetLink || mockMeetLink,
         notes: notes?.trim() || null,
       },
       include: {

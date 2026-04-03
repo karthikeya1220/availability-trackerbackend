@@ -87,6 +87,8 @@ model Call {
   startTime  DateTime   @map("start_time")
   endTime    DateTime   @map("end_time")
   status     CallStatus @default(SCHEDULED)
+  title      String?    @default("Mentoring Call")
+  meetLink   String?    @map("meet_link")
   notes      String?
   createdAt  DateTime   @default(now()) @map("created_at")
 
