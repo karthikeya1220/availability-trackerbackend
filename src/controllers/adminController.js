@@ -3,13 +3,21 @@ import { DateTime } from "luxon";
 import { prisma } from "../lib/prisma.js";
 import { v4 as uuidv4 } from "uuid";
 import { isPastTime } from "../utils/time.js";
-import { createCalendarEventWithMeet } from "../services/googleCalendar.js";
 
 export async function listUsers(req, res, next) {
   try {
     const users = await prisma.user.findMany({
       where: { role: "USER" },
-      select: { id: true, name: true, email: true, timezone: true, createdAt: true },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        timezone: true,
+        tags: true,
+        domain: true,
+        description: true,
+        createdAt: true,
+      },
       orderBy: { name: "asc" },
     });
     res.json(users);
@@ -22,7 +30,18 @@ export async function listMentors(req, res, next) {
   try {
     const mentors = await prisma.user.findMany({
       where: { role: "MENTOR" },
-      select: { id: true, name: true, email: true, timezone: true, createdAt: true },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        timezone: true,
+        tags: true,
+        domain: true,
+        description: true,
+        companyType: true,
+        communicationScore: true,
+        createdAt: true,
+      },
       orderBy: { name: "asc" },
     });
     res.json(mentors);
@@ -60,9 +79,91 @@ export async function createUser(req, res, next) {
         role,
         timezone: "UTC",
       },
-      select: { id: true, name: true, email: true, role: true, timezone: true, createdAt: true },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        role: true,
+        timezone: true,
+        tags: true,
+        domain: true,
+        description: true,
+        companyType: true,
+        communicationScore: true,
+        createdAt: true,
+      },
     });
     res.status(201).json(user);
+  } catch (e) {
+    next(e);
+  }
+}
+
+export async function updateMentorProfile(req, res, next) {
+  try {
+    const { mentorId } = req.params;
+    const { tags, domain, description, companyType, communicationScore } = req.body;
+
+    const mentor = await prisma.user.findUnique({ where: { id: mentorId } });
+    if (!mentor || mentor.role !== "MENTOR") {
+      return res.status(404).json({ error: "Mentor not found" });
+    }
+
+    const updated = await prisma.user.update({
+      where: { id: mentorId },
+      data: {
+        ...(tags !== undefined && { tags }),
+        ...(domain !== undefined && { domain }),
+        ...(description !== undefined && { description }),
+        ...(companyType !== undefined && { companyType }),
+        ...(communicationScore !== undefined && { communicationScore: parseFloat(communicationScore) }),
+      },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        timezone: true,
+        tags: true,
+        domain: true,
+        description: true,
+        companyType: true,
+        communicationScore: true,
+      },
+    });
+    res.json(updated);
+  } catch (e) {
+    next(e);
+  }
+}
+
+export async function updateUserProfile(req, res, next) {
+  try {
+    const { userId } = req.params;
+    const { tags, domain, description } = req.body;
+
+    const user = await prisma.user.findUnique({ where: { id: userId } });
+    if (!user || user.role !== "USER") {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    const updated = await prisma.user.update({
+      where: { id: userId },
+      data: {
+        ...(tags !== undefined && { tags }),
+        ...(domain !== undefined && { domain }),
+        ...(description !== undefined && { description }),
+      },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        timezone: true,
+        tags: true,
+        domain: true,
+        description: true,
+      },
+    });
+    res.json(updated);
   } catch (e) {
     next(e);
   }
@@ -105,11 +206,7 @@ export async function getAvailabilityForUser(req, res, next) {
       });
     });
 
-    res.json({
-      weekStart: weekStartDate.toISOString().slice(0, 10),
-      dates,
-      availability: byDate,
-    });
+    res.json({ weekStart: weekStartDate.toISOString().slice(0, 10), dates, availability: byDate });
   } catch (e) {
     next(e);
   }
@@ -169,23 +266,27 @@ export async function scheduleMeeting(req, res, next) {
 
     let start;
     let end;
-    /** IANA timezone for Google Calendar (e.g. "Asia/Kolkata" or "UTC"). DB always stores UTC. */
-    let requestTimezone = "UTC";
 
-    if (date && timezone && typeof startTime === "string" && typeof endTime === "string" && /^\d{2}:\d{2}$/.test(startTime) && /^\d{2}:\d{2}$/.test(endTime)) {
+    if (
+      date &&
+      timezone &&
+      typeof startTime === "string" &&
+      typeof endTime === "string" &&
+      /^\d{2}:\d{2}$/.test(startTime) &&
+      /^\d{2}:\d{2}$/.test(endTime)
+    ) {
       const startDt = DateTime.fromFormat(`${date} ${startTime}`, "dd-MM-yyyy HH:mm", { zone: timezone });
       const endDt = DateTime.fromFormat(`${date} ${endTime}`, "dd-MM-yyyy HH:mm", { zone: timezone });
       if (!startDt.isValid || !endDt.isValid) {
-        return res.status(400).json({ error: "Invalid date or time. Use dd-MM-yyyy and HH:mm in the selected timezone." });
+        return res.status(400).json({ error: "Invalid date or time format. Use dd-MM-yyyy and HH:mm." });
       }
       start = startDt.toJSDate();
       end = endDt.toJSDate();
-      requestTimezone = timezone;
     } else if (startTime && endTime) {
       start = new Date(startTime);
       end = new Date(endTime);
     } else {
-      return res.status(400).json({ error: "startTime and endTime are required (or date, startTime, endTime, timezone)." });
+      return res.status(400).json({ error: "startTime and endTime are required." });
     }
 
     if (start >= end) {
@@ -199,7 +300,6 @@ export async function scheduleMeeting(req, res, next) {
       ? participantEmails.map((e) => (typeof e === "string" ? e.trim() : "")).filter(Boolean)
       : [];
 
-    // Create meeting in DB first (meetLink null if Google not connected or fails).
     const meeting = await prisma.meeting.create({
       data: {
         id: uuidv4(),
@@ -215,40 +315,9 @@ export async function scheduleMeeting(req, res, next) {
 
     if (emails.length > 0) {
       await prisma.meetingParticipant.createMany({
-        data: emails.map((email) => ({
-          id: uuidv4(),
-          meetingId: meeting.id,
-          email,
-        })),
+        data: emails.map((email) => ({ id: uuidv4(), meetingId: meeting.id, email })),
         skipDuplicates: true,
       });
-    }
-
-    // Create Google Calendar event + Meet link using GOOGLE_REFRESH_TOKEN from .env (do not break meeting creation if this fails).
-    let meetLink = null;
-    let googleEventId = null;
-    try {
-      const created = await createCalendarEventWithMeet({
-        title: title.trim(),
-        startTime: start,
-        endTime: end,
-        attendeeEmails: emails,
-        timezone: requestTimezone,
-      });
-      meetLink = created.meetLink ?? null;
-      googleEventId = created.eventId ?? null;
-      if (meetLink || googleEventId) {
-        await prisma.meeting.update({
-          where: { id: meeting.id },
-          data: {
-            ...(meetLink && { meetLink }),
-            ...(googleEventId && { googleEventId }),
-            ...(googleEventId && { calendarEventId: googleEventId }),
-          },
-        });
-      }
-    } catch (err) {
-      console.error("[scheduleMeeting] Google Calendar/Meet API failed (meeting already saved). Meet link will be null.", err?.message || err);
     }
 
     const withParticipants = await prisma.meeting.findUnique({
@@ -256,7 +325,7 @@ export async function scheduleMeeting(req, res, next) {
       include: { participants: true },
     });
 
-    res.status(201).json({ ...withParticipants, meetLink: withParticipants.meetLink ?? meetLink });
+    res.status(201).json(withParticipants);
   } catch (e) {
     next(e);
   }

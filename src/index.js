@@ -2,33 +2,58 @@ import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
-import jwt from "jsonwebtoken";
 import { authRoutes } from "./routes/auth.js";
 import { availabilityRoutes } from "./routes/availability.js";
-import { meetingRoutes } from "./routes/meeting.js";
+import { callRoutes } from "./routes/calls.js";
 import { adminRoutes } from "./routes/admin.js";
-import { googleRouter } from "./routes/google.routes.js";
+import bookingRoutes from "./routes/booking.js";
+import recommendationRoutes from "./routes/recommendation.js";
+import adminSchedulingRoutes from "./routes/adminScheduling.js";
 import { errorHandler } from "./middleware/errorHandler.js";
 
 const app = express();
 const PORT = process.env.PORT || 5001;
 
+// Build allowed origins from environment and defaults
 const allowedOrigins = [
+  process.env.FRONTEND_URL || "http://localhost:5173",
   "https://availabilitytrackerfrontend.vercel.app",
   "http://localhost:3000",
   "http://localhost:5173",
+  "http://127.0.0.1:5173",
+  "http://127.0.0.1:3000",
 ];
+
+// Remove duplicates
+const uniqueOrigins = [...new Set(allowedOrigins)];
+
+console.log("✅ CORS Allowed Origins:", uniqueOrigins);
 
 app.use(
   cors({
-    origin: allowedOrigins,
+    origin: function (origin, callback) {
+      // Allow requests with no origin (like mobile apps or Postman)
+      if (!origin) return callback(null, true);
+      
+      if (uniqueOrigins.indexOf(origin) !== -1 || process.env.NODE_ENV !== "production") {
+        callback(null, true);
+      } else {
+        callback(new Error("Not allowed by CORS"));
+      }
+    },
     credentials: true,
+    methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization", "Cache-Control", "Pragma", "Expires"],
+    exposedHeaders: ["Content-Type", "Authorization"],
+    maxAge: 86400, // 24 hours
   })
 );
 app.use(express.json());
 app.use(cookieParser());
 
+// Cache control middleware for auth routes (apply BEFORE response is sent)
 app.use("/api/auth", (req, res, next) => {
+  // Set cache headers immediately, before route handlers send response
   res.set("Cache-Control", "no-store, no-cache, must-revalidate, private");
   res.set("Pragma", "no-cache");
   res.set("Expires", "0");
@@ -37,36 +62,13 @@ app.use("/api/auth", (req, res, next) => {
 
 app.use("/api/auth", authRoutes);
 app.use("/api/availability", availabilityRoutes);
-app.use("/api/meetings", meetingRoutes);
+app.use("/api/bookings", bookingRoutes);
+app.use("/api/calls", callRoutes);
 app.use("/api/admin", adminRoutes);
-app.use("/api/google", googleRouter);
+app.use("/api/admin/schedule", adminSchedulingRoutes);
+app.use("/api/recommendations", recommendationRoutes);
 
 app.get("/health", (_, res) => res.json({ ok: true }));
-
-app.post("/debug-token", (req, res) => {
-  const authHeader = req.headers.authorization;
-  const token = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
-  if (!token) return res.json({ error: "no token" });
-
-  const JWT_SECRET = process.env.JWT_SECRET;
-  const MAIN_SITE_JWT_SECRET = process.env.MAIN_SITE_JWT_SECRET || "your-secret-key-change-in-production";
-
-  let decoded1 = null, err1 = null;
-  let decoded2 = null, err2 = null;
-
-  try { decoded1 = jwt.verify(token, JWT_SECRET); } catch(e) { err1 = e.message; }
-  try { decoded2 = jwt.verify(token, MAIN_SITE_JWT_SECRET); } catch(e) { err2 = e.message; }
-
-  const raw = jwt.decode(token);
-
-  res.json({
-    raw_payload: raw,
-    verify_with_JWT_SECRET: decoded1 || err1,
-    verify_with_MAIN_SITE_JWT_SECRET: decoded2 || err2,
-    JWT_SECRET_set: !!JWT_SECRET,
-    MAIN_SITE_JWT_SECRET_set: !!process.env.MAIN_SITE_JWT_SECRET,
-  });
-});
 
 app.use(errorHandler);
 

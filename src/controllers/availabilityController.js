@@ -12,12 +12,24 @@ import {
 
 export async function getWeekly(req, res, next) {
   try {
-    const { userId: targetUserId, mentorId, weekStart } = req.query;
+    const { userId, mentorId, entity_id, entity_type, weekStart } = req.query;
     const callerId = req.userId;
     const callerRole = req.userRole;
 
+    // Support both old (userId/mentorId) and new (entity_id/entity_type) keys
+    let targetUserId = userId;
+    let targetMentorId = mentorId;
+
+    if (entity_id) {
+      if (entity_type === "MENTOR") {
+        targetMentorId = entity_id;
+      } else {
+        targetUserId = entity_id;
+      }
+    }
+
     const hasUserId = targetUserId != null && String(targetUserId).trim() !== "";
-    const hasMentorId = mentorId != null && String(mentorId).trim() !== "";
+    const hasMentorId = targetMentorId != null && String(targetMentorId).trim() !== "";
 
     let where = {};
     let requestedUserId = null;
@@ -28,7 +40,7 @@ export async function getWeekly(req, res, next) {
       where.role = "USER";
       requestedUserId = where.userId;
     } else if (hasMentorId && !hasUserId) {
-      where.mentorId = String(mentorId).trim();
+      where.mentorId = String(targetMentorId).trim();
       where.role = "MENTOR";
       requestedMentorId = where.mentorId;
     } else if (!hasUserId && !hasMentorId) {
@@ -93,7 +105,7 @@ export async function getWeekly(req, res, next) {
 
 export async function saveBatch(req, res, next) {
   try {
-    const { slots } = req.body;
+    const { slots, entity_id, entity_type } = req.body;
     const callerId = req.userId;
     const role = req.userRole;
     if (!Array.isArray(slots)) {
@@ -105,8 +117,10 @@ export async function saveBatch(req, res, next) {
 
     for (const slot of slots) {
       const { date, startTime, endTime, enabled } = slot;
-      const targetUserId = slot.userId;
-      const targetMentorId = slot.mentorId;
+      
+      // Support both slot-level overrides and top-level overrides
+      let targetUserId = slot.userId || (entity_id && entity_type !== "MENTOR" ? entity_id : null);
+      let targetMentorId = slot.mentorId || (entity_id && entity_type === "MENTOR" ? entity_id : null);
 
       let saveAsUserId = null;
       let saveAsMentorId = null;
@@ -224,4 +238,49 @@ export async function saveBatch(req, res, next) {
   } catch (e) {
     next(e);
   }
+}
+
+/**
+ * Finds overlapping availability slots between a user and a mentor
+ */
+export async function findOverlappingSlots(userId, mentorId, startDate, endDate) {
+  const dateFilter = {};
+  if (startDate) dateFilter.gte = startDate;
+  if (endDate) dateFilter.lte = endDate;
+
+  const userSlots = await prisma.availability.findMany({
+    where: { userId, role: "USER", isBooked: false, ...(Object.keys(dateFilter).length > 0 ? { date: dateFilter } : {}) },
+    orderBy: { startTime: "asc" },
+  });
+
+  const mentorSlots = await prisma.availability.findMany({
+    where: { mentorId, role: "MENTOR", isBooked: false, ...(Object.keys(dateFilter).length > 0 ? { date: dateFilter } : {}) },
+    orderBy: { startTime: "asc" },
+  });
+
+  const overlaps = [];
+  const mentorSlotsByDate = {};
+  mentorSlots.forEach(s => {
+    const d = s.date.toISOString().slice(0, 10);
+    if (!mentorSlotsByDate[d]) mentorSlotsByDate[d] = [];
+    mentorSlotsByDate[d].push(s);
+  });
+
+  for (const u of userSlots) {
+    const d = u.date.toISOString().slice(0, 10);
+    const mDay = mentorSlotsByDate[d] || [];
+    for (const m of mDay) {
+      const start = u.startTime > m.startTime ? u.startTime : m.startTime;
+      const end = u.endTime < m.endTime ? u.endTime : m.endTime;
+      if (end.getTime() - start.getTime() >= 15 * 60 * 1000) {
+        overlaps.push({
+          date: u.date,
+          userSlot: { id: u.id, startTime: u.startTime, endTime: u.endTime },
+          mentorSlot: { id: m.id, startTime: m.startTime, endTime: m.endTime },
+          overlapPeriod: { startTime: start, endTime: end, durationMinutes: Math.round((end - start) / 60000) },
+        });
+      }
+    }
+  }
+  return overlaps;
 }
