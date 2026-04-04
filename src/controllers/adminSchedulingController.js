@@ -385,48 +385,6 @@ export async function getSchedulingOverlaps(req, res, next) {
       });
     }
 
-    // Check which overlaps are already booked
-    const slotIds = new Set();
-    overlaps.forEach((overlap) => {
-      slotIds.add(overlap.userSlot.id);
-      slotIds.add(overlap.mentorSlot.id);
-    });
-
-    const bookedSlots = await prisma.availability.findMany({
-      where: {
-        id: { in: Array.from(slotIds) },
-        isBooked: true,
-      },
-      select: { id: true },
-    });
-
-    const bookedSlotIds = new Set(bookedSlots.map((s) => s.id));
-
-    // Filter out overlaps where either slot is already booked
-    const availableOverlaps = overlaps.filter(
-      (overlap) =>
-        !bookedSlotIds.has(overlap.userSlot.id) &&
-        !bookedSlotIds.has(overlap.mentorSlot.id)
-    );
-
-    // All overlaps are already booked
-    if (availableOverlaps.length === 0) {
-      return res.status(400).json({
-        step: 2,
-        success: false,
-        error: "All overlapping slots are already booked",
-        code: "ALL_SLOTS_BOOKED",
-        userId: user_id,
-        userName: user.name,
-        mentorId: mentor_id,
-        mentorName: mentor.name,
-        totalOverlaps: overlaps.length,
-        bookedOverlaps: overlaps.length,
-        availableOverlaps: 0,
-        hint: "All time windows where both are available are already reserved. Try a different date range or mentor.",
-      });
-    }
-
     res.status(200).json({
       step: 2,
       success: true,
@@ -439,9 +397,9 @@ export async function getSchedulingOverlaps(req, res, next) {
         endDate: date_end || null,
       },
       totalOverlaps: overlaps.length,
-      bookedOverlaps: overlaps.length - availableOverlaps.length,
-      availableOverlaps: availableOverlaps.length,
-      overlaps: availableOverlaps.map((overlap) => ({
+      bookedOverlaps: 0,
+      availableOverlaps: overlaps.length,
+      overlaps: overlaps.map((overlap) => ({
         overlapId: `${overlap.userSlot.id}-${overlap.mentorSlot.id}`,
         date: overlap.date,
         userSlot: {
@@ -665,28 +623,7 @@ export async function bookScheduledCall(req, res, next) {
       });
     }
 
-    // Validate slots are not already booked
-    if (userSlot.isBooked) {
-      return res.status(409).json({
-        error: `User availability slot "${user_slot_id}" is already booked`,
-        code: "SLOT_ALREADY_BOOKED",
-        hint: "Select a different unbooked slot",
-        slotId: user_slot_id,
-        slotType: "user",
-        bookedAt: userSlot.bookedAt,
-      });
-    }
-
-    if (mentorSlot.isBooked) {
-      return res.status(409).json({
-        error: `Mentor availability slot "${mentor_slot_id}" is already booked`,
-        code: "SLOT_ALREADY_BOOKED",
-        hint: "Select a different unbooked slot",
-        slotId: mentor_slot_id,
-        slotType: "mentor",
-        bookedAt: mentorSlot.bookedAt,
-      });
-    }
+    // Slots exist and belong to correct owners
 
     // Validate requested call time is within both availability slots
     const userSlotStart = new Date(userSlot.startTime);
@@ -726,42 +663,18 @@ export async function bookScheduledCall(req, res, next) {
       });
     }
 
-    // Start transaction: create call and mark slots as booked
-    const result = await prisma.$transaction(async (tx) => {
-      // Create call
-      const call = await tx.call.create({
-        data: {
-          id: uuidv4(),
-          adminId: req.userId,
-          userId: user_id,
-          mentorId: mentor_id,
-          callType: call_type,
-          title: title || `Call between ${user.name} and ${mentor.name}`,
-          startTime: startTime,
-          endTime: endTime,
-        },
-      });
-
-      // Mark slots as booked
-      const now = new Date();
-      await Promise.all([
-        tx.availability.update({
-          where: { id: user_slot_id },
-          data: {
-            isBooked: true,
-            bookedAt: now,
-          },
-        }),
-        tx.availability.update({
-          where: { id: mentor_slot_id },
-          data: {
-            isBooked: true,
-            bookedAt: now,
-          },
-        }),
-      ]);
-
-      return call;
+    // Create the call
+    const result = await prisma.call.create({
+      data: {
+        id: uuidv4(),
+        adminId: req.userId,
+        userId: user_id,
+        mentorId: mentor_id,
+        callType: call_type,
+        title: title || `Call between ${user.name} and ${mentor.name}`,
+        startTime: startTime,
+        endTime: endTime,
+      },
     });
 
     res.status(201).json({

@@ -249,12 +249,12 @@ export async function findOverlappingSlots(userId, mentorId, startDate, endDate)
   if (endDate) dateFilter.lte = endDate;
 
   const userSlots = await prisma.availability.findMany({
-    where: { userId, role: "USER", isBooked: false, ...(Object.keys(dateFilter).length > 0 ? { date: dateFilter } : {}) },
+    where: { userId, role: "USER", ...(Object.keys(dateFilter).length > 0 ? { date: dateFilter } : {}) },
     orderBy: { startTime: "asc" },
   });
 
   const mentorSlots = await prisma.availability.findMany({
-    where: { mentorId, role: "MENTOR", isBooked: false, ...(Object.keys(dateFilter).length > 0 ? { date: dateFilter } : {}) },
+    where: { mentorId, role: "MENTOR", ...(Object.keys(dateFilter).length > 0 ? { date: dateFilter } : {}) },
     orderBy: { startTime: "asc" },
   });
 

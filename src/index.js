@@ -6,7 +6,6 @@ import { authRoutes } from "./routes/auth.js";
 import { availabilityRoutes } from "./routes/availability.js";
 import { callRoutes } from "./routes/calls.js";
 import { adminRoutes } from "./routes/admin.js";
-import bookingRoutes from "./routes/booking.js";
 import recommendationRoutes from "./routes/recommendation.js";
 import adminSchedulingRoutes from "./routes/adminScheduling.js";
 import { errorHandler } from "./middleware/errorHandler.js";
@@ -62,7 +61,6 @@ app.use("/api/auth", (req, res, next) => {
 
 app.use("/api/auth", authRoutes);
 app.use("/api/availability", availabilityRoutes);
-app.use("/api/bookings", bookingRoutes);
 app.use("/api/calls", callRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/admin/schedule", adminSchedulingRoutes);
